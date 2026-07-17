@@ -1,0 +1,1146 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>DTS - Grupo Solution</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#185FA5" />
+  <script>
+    // Registra o service worker (modo offline). Falha silenciosa se não suportado.
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("sw.js").catch(()=>{});
+      });
+    }
+  </script>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:#f1f1f1; color:#1a1a1a; }
+    #root { max-width:640px; margin:0 auto; min-height:100vh; background:#fff; }
+    .header { background:#185FA5; color:#fff; padding:16px; position:sticky; top:0; z-index:10; }
+    .header h1 { margin:0; font-size:17px; font-weight:600; }
+    .header p { margin:4px 0 0; font-size:13px; color:#B5D4F4; }
+    .meta-now { margin:6px 0 0; font-size:12px; color:#cfe3f7; }
+    .section { padding:16px; border-bottom:8px solid #f1f1f1; }
+    .section h2 { font-size:14px; margin:0 0 4px; color:#185FA5; }
+    .section .hint { font-size:12px; color:#888; margin:0 0 12px; }
+    label { font-size:12px; color:#666; display:block; margin-bottom:4px; }
+    input[type=text], input[type=date], input[type=time], textarea {
+      width:100%; padding:10px; font-size:15px; border:1px solid #ccc; border-radius:8px; margin-bottom:12px; font-family:inherit; }
+    .field-row { display:flex; gap:10px; }
+    .field-row > div { flex:1; }
+    .pills { display:flex; flex-wrap:wrap; gap:8px; }
+    .pill { font-size:13px; padding:9px 13px; border-radius:18px; border:1px solid #bbb; background:#fff; color:#333; cursor:pointer; user-select:none; }
+    .pill.on { background:#E6F1FB; border-color:#185FA5; color:#0C447C; font-weight:500; }
+    .pill.outro { border-style:dashed; background:#f7f7f7; color:#666; }
+    .etapa { border:1px solid #ddd; border-radius:10px; margin-bottom:12px; overflow:hidden; }
+    .etapa-head { padding:12px 14px; background:#f7f9fc; cursor:pointer; display:flex; align-items:center; gap:10px; font-size:14px; font-weight:500; }
+    .etapa-head.on { background:#185FA5; color:#fff; }
+    .etapa-check { width:20px; height:20px; border-radius:5px; border:2px solid #185FA5; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:13px; }
+    .etapa-head.on .etapa-check { background:#fff; color:#185FA5; border-color:#fff; }
+    .etapa-body { padding:12px 14px; }
+    .risco-card { border:1px solid #e3e3e3; border-radius:8px; margin-bottom:10px; }
+    .risco-head { padding:10px 12px; display:flex; align-items:center; gap:8px; cursor:pointer; }
+    .risco-head.on { background:#E6F1FB; }
+    .risco-chk { width:18px; height:18px; border-radius:4px; border:2px solid #999; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:12px; }
+    .risco-head.on .risco-chk { background:#185FA5; border-color:#185FA5; color:#fff; }
+    .risco-nome { flex:1; font-size:13px; }
+    .nivel-btns { display:flex; gap:6px; }
+    .nivel-btn { width:30px; height:30px; border-radius:7px; border:1px solid #bbb; background:#fff; font-size:13px; font-weight:600; cursor:pointer; }
+    .nivel-btn.A.sel { background:#A32D2D; color:#fff; border-color:#A32D2D; }
+    .nivel-btn.M.sel { background:#BA7517; color:#fff; border-color:#BA7517; }
+    .nivel-btn.B.sel { background:#2E7D32; color:#fff; border-color:#2E7D32; }
+    .barreiras-box { padding:0 12px 12px; }
+    .barreira-grupo { margin-top:8px; }
+    .barreira-grupo .tit { font-size:11px; color:#888; text-transform:uppercase; letter-spacing:.3px; margin-bottom:5px; }
+    .team-add { display:flex; gap:8px; margin-bottom:12px; }
+    .team-add input { margin-bottom:0; }
+    .btn { padding:11px 16px; border-radius:8px; border:none; font-size:14px; font-weight:600; cursor:pointer; }
+    .btn-blue { background:#185FA5; color:#fff; }
+    .btn-light { background:#e8e8e8; color:#333; }
+    .team-item { display:flex; align-items:center; gap:10px; padding:10px 12px; background:#f7f7f7; border-radius:8px; margin-bottom:8px; }
+    .team-item .nome { flex:1; font-size:14px; }
+    .team-item button.del { background:none; border:none; color:#c00; font-size:18px; cursor:pointer; }
+    .rubrica-box { display:flex; flex-direction:column; align-items:center; }
+    .rubrica-canvas { border:1px dashed #aaa; border-radius:6px; background:#fff; touch-action:none; }
+    .rubrica-mini { width:90px; height:40px; border:1px solid #ddd; border-radius:6px; background:#fff; object-fit:contain; }
+    .rubrica-actions { display:flex; gap:6px; margin-top:4px; }
+    .rubrica-actions button { font-size:11px; padding:4px 8px; border-radius:5px; border:1px solid #ccc; background:#fff; cursor:pointer; }
+    .footer-actions { padding:16px; display:flex; flex-direction:column; gap:10px; }
+    .outro-input { margin-top:8px; }
+    .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#222; color:#fff; padding:12px 20px; border-radius:8px; font-size:14px; z-index:100; }
+    .toast.err { background:#A32D2D; }
+    .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; z-index:200; padding:20px; }
+    .modal { background:#fff; border-radius:12px; padding:18px; width:100%; max-width:360px; }
+    .modal h3 { margin:0 0 10px; font-size:15px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useRef, useEffect } = React;
+
+    // ===== CONFIG SUPABASE =====
+    const SUPABASE_URL = "https://pxcrbgpycoifibrewqsx.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB4Y3JiZ3B5Y29pZmlicmV3cXN4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQyMzcyNDYsImV4cCI6MjA5OTgxMzI0Nn0.Z81p27gCtoOu0JhSbnsNM02Ajwg1RymSqqgXT7Vhjzw";
+    const supa = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // ===== CATÁLOGO POR ETAPAS =====
+    const ETAPAS = [
+      { id:"mobilizacao", nome:"Mobilização", riscos:[
+        { nome:"Atropelamento / colisão no deslocamento de pessoas e veículos", nivel:"A", controle:["Planejamento da rota","Isolamento da área de descarga"], protecao:["EPIs","Cones"], suporte:["DDS","Procedimento de mobilização","Supervisão"] },
+        { nome:"Queda de materiais/ferramentas no transporte e descarga", nivel:"M", controle:["Amarração e acomodação adequada da carga"], protecao:["Luvas","Botina de segurança","Capacete"], suporte:["Treinamento"] },
+        { nome:"Desorganização do canteiro / tropeço", nivel:"B", controle:["Definição de áreas de armazenamento"], protecao:["Botina","Atenção ao piso"], suporte:["Ordem e limpeza"] },
+      ]},
+      { id:"sinalizacao", nome:"Sinalização", riscos:[
+        { nome:"Atropelamento por tráfego de veículos", nivel:"A", controle:["Isolamento físico (cones, fita zebrada)","Desvio de tráfego"], protecao:["Placas de sinalização","Sinaleiro/bandeirinha"], suporte:["Procedimento de sinalização viária","Supervisão"] },
+        { nome:"Exposição ao sol / calor", nivel:"M", controle:["Pausas e hidratação"], protecao:["Protetor solar","Vestimenta adequada","Touca árabe"], suporte:["Treinamento"] },
+        { nome:"Esforço leve ao posicionar cones/placas", nivel:"B", controle:["Distribuição equilibrada das peças"], protecao:["Luvas","Cinta (quando aplicável)"], suporte:["Orientação de manuseio"] },
+      ]},
+      { id:"reaterro", nome:"Reaterro", riscos:[
+        { nome:"Esmagamento de membros", nivel:"A", controle:["Isolamento da área","Distância segura do equipamento"], protecao:["Sinalização"], suporte:["Comunicação operador/equipe","Supervisão"] },
+        { nome:"Lesão por esforço repetitivo (LER)", nivel:"M", controle:["Lançamento em camadas","Divisão de tarefas","Uso de ferramentas adequadas"], protecao:["Luvas","Botina","Cinta (quando aplicável)"], suporte:["Treinamento ergonômico / levantamento manual"] },
+        { nome:"Ruído e vibração da placa/sapo compactador", nivel:"M", controle:["Revezamento de operadores"], protecao:["Protetor auricular/abafador","Luvas antivibração"], suporte:["Treinamento"] },
+        { nome:"Poeira em suspensão (material seco)", nivel:"M", controle:["Umidificação do material"], protecao:["Máscara PFF2","Óculos"], suporte:["Treinamento","DDS"] },
+        { nome:"Queda de mesmo nível", nivel:"B", controle:["Organização da frente","Sinalização das bordas"], protecao:["Botina","Atenção ao piso"], suporte:["Ordem e limpeza"] },
+      ]},
+      { id:"recorte", nome:"Recorte e acerto da geometria", riscos:[
+        { nome:"Contato com partes móveis / amputação (serra clipper)", nivel:"A", controle:["Inspeção prévia","Dispositivos de proteção da máquina"], protecao:["Luvas","Calçado de segurança","Óculos/viseira","Abafador"], suporte:["Treinamento","Supervisão"] },
+        { nome:"Projeção de partículas no corte", nivel:"A", controle:["Corte com água (controle de poeira)","Proteção da máquina"], protecao:["Óculos","Protetor facial","Máscara PFF2"], suporte:["Treinamento no equipamento","Procedimento de corte"] },
+        { nome:"Ruído e poeira (sílica)", nivel:"M", controle:["Umidificação do corte"], protecao:["Protetor auricular/abafador","Máscara PFF2"], suporte:["Treinamento"] },
+        { nome:"Vibração de mãos/braços", nivel:"B", controle:["Revezamento de operadores"], protecao:["Luvas antivibração"], suporte:["Treinamento","DDS"] },
+      ]},
+      { id:"calcada", nome:"Recomposição de calçada / base de concreto", riscos:[
+        { nome:"Atropelamento por tráfego no entorno da frente", nivel:"A", controle:["Isolamento da área","Sinalização"], protecao:["Veículo como barreira"], suporte:["Procedimento de sinalização","Supervisão"] },
+        { nome:"Contato com cimento / Poeira respirável", nivel:"M", controle:["Manuseio correto do material"], protecao:["Luvas nitrílicas","Óculos","Botina","Máscara PFF2"], suporte:["Treinamento"] },
+        { nome:"Lesão (esforço/postura)", nivel:"M", controle:["Ferramentas adequadas","Divisão de tarefas"], protecao:["Luvas","Cinta (quando aplicável)"], suporte:["Treinamento"] },
+      ]},
+      { id:"cbuq", nome:"Recomposição de asfalto quente (CBUQ)", riscos:[
+        { nome:"Queimadura por contato com massa quente", nivel:"A", controle:["Manter distância segura","Ferramentas com cabo longo"], protecao:["Luvas térmicas","Calça e manga comprida","Botina","Avental/perneira"], suporte:["Procedimento de aplicação de CBUQ","Supervisão"] },
+        { nome:"Atropelamento por equipamento (rolo/vibroacabadora)", nivel:"A", controle:["Isolamento","Distância segura do equipamento"], protecao:["Sinalização"], suporte:["Comunicação operador/equipe","Supervisão"] },
+        { nome:"Inalação de vapores / fumos asfálticos", nivel:"M", controle:["Trabalho a favor do vento","Ventilação natural"], protecao:["Máscara PFF2","Óculos"], suporte:["Treinamento sobre exposição a fumos"] },
+      ]},
+      { id:"pmf", nome:"Recomposição de asfalto frio (PMF)", riscos:[
+        { nome:"Contato com produto (irritação pele/olhos)", nivel:"M", controle:["Manuseio correto","Abertura cuidadosa da embalagem"], protecao:["Luvas","Óculos","Botina","Cinta"], suporte:["Treinamento"] },
+        { nome:"Lesão por esforço repetitivo (LER)", nivel:"M", controle:["Revezamento"], protecao:["Luvas","Protetor auricular (placa vibratória)"], suporte:["Treinamento ergonômico"] },
+        { nome:"Manuseio do material ensacado", nivel:"B", controle:["Levantamento correto","Peso fracionado"], protecao:["Luvas","Botina","Cinta (quando aplicável)"], suporte:["Orientação de levantamento manual"] },
+      ]},
+      { id:"lajota", nome:"Recomposição de lajota / paralelepípedo", riscos:[
+        { nome:"Esmagamento de mãos/pés por peças pesadas", nivel:"A", controle:["Movimentação correta","Ponto de apoio seguro"], protecao:["Luvas","Botina com biqueira"], suporte:["Treinamento de movimentação manual"] },
+        { nome:"Projeção de fragmentos no corte/assentamento", nivel:"M", controle:["Posicionamento seguro"], protecao:["Óculos","Luvas"], suporte:["Procedimento de assentamento"] },
+        { nome:"Postura inadequada (trabalho agachado)", nivel:"B", controle:["Pausas e alternância de posição"], protecao:["Joelheira (quando aplicável)"], suporte:["Orientação ergonômica"] },
+      ]},
+      { id:"grama", nome:"Plantio de grama", riscos:[
+        { nome:"Atropelamento por tráfego no entorno da frente", nivel:"A", controle:["Isolamento da área","Sinalização"], protecao:["Veículo como barreira"], suporte:["Procedimento de sinalização","Supervisão"] },
+        { nome:"Postura inadequada (trabalho agachado)", nivel:"B", controle:["Pausas e alternância de posição"], protecao:["Joelheira (quando aplicável)"], suporte:["Orientação ergonômica"] },
+        { nome:"Contato com terra/adubo", nivel:"M", controle:["Manuseio correto","Higienização das mãos"], protecao:["Luvas","Botina"], suporte:["Treinamento"] },
+        { nome:"Corte/perfuração (enxada, pá)", nivel:"B", controle:["Inspeção e uso correto da ferramenta"], protecao:["Luvas","Botina"], suporte:["Orientação de manuseio"] },
+        { nome:"Exposição ao sol / calor", nivel:"B", controle:["Pausas e hidratação"], protecao:["Protetor solar","Vestimenta adequada","Touca árabe"], suporte:["Treinamento","DDS"] },
+      ]},
+      { id:"limpeza", nome:"Limpeza da área", riscos:[
+        { nome:"Contato com resíduos / objetos perfurocortantes", nivel:"M", controle:["Recolhimento ordenado","Ferramentas adequadas (rodo, pá)"], protecao:["Luvas","Botina"], suporte:["Procedimento de limpeza e destinação de materiais"] },
+        { nome:"Poeira respirável", nivel:"M", controle:["Umidificação da área antes de varrer"], protecao:["Máscara PFF2","Óculos"], suporte:["Treinamento"] },
+        { nome:"Queda de mesmo nível", nivel:"B", controle:["Organização do recolhimento"], protecao:["Luvas","Botina"], suporte:["Ordem e limpeza"] },
+      ]},
+      { id:"desmobilizacao", nome:"Desmobilização", riscos:[
+        { nome:"Atropelamento na retirada de sinalização", nivel:"A", controle:["Retirar sinalização no sentido do tráfego, a montante por último"], protecao:["Atenção ao fluxo"], suporte:["Procedimento de desmobilização","Supervisão"] },
+        { nome:"Queda de materiais no carregamento", nivel:"M", controle:["Carga bem acomodada e amarrada"], protecao:["Luvas","Botina","Capacete"], suporte:["Treinamento de movimentação de carga"] },
+        { nome:"Esforço leve na coleta de cones/equipamentos", nivel:"B", controle:["Distribuição do esforço"], protecao:["Luvas"], suporte:["Orientação de manuseio"] },
+      ]},
+    ];
+    const EPIS = ["Capacete c/ jugular","Óculos de proteção (incolor)","Óculos de proteção (escuro)","Protetor auricular (plug)","Protetor auricular (concha)","Respirador PFF2 (poeira/sílica)","Respirador c/ filtro p/ vapores orgânicos","Colete refletivo de alta visibilidade","Luva de raspa/couro","Luva nitrílica (emulsão)","Luva antivibração","Calça e camisa manga longa (brim)","Botina de segurança c/ biqueira","Faixa/cinto lombar","Protetor solar","Chapéu árabe"];
+    const CRITICAS = ["Escavação","Içamento de carga","Trabalho a quente","Eletricidade","Espaço confinado","Trabalho em altura","Mergulho"];
+
+    function fmtData(d){ const dd=String(d.getDate()).padStart(2,"0"), mm=String(d.getMonth()+1).padStart(2,"0"); return dd+"/"+mm+"/"+d.getFullYear(); }
+
+    // ===== Armazenamento local (IndexedDB) das DTS recentes no aparelho =====
+    const DB_NOME="dts_local", STORE="recentes", FILA="pendentes";
+    function abrirDB(){
+      return new Promise((res,rej)=>{
+        const req=indexedDB.open(DB_NOME,2);
+        req.onupgradeneeded=()=>{ const db=req.result;
+          if(!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE,{keyPath:"id"});
+          if(!db.objectStoreNames.contains(FILA)) db.createObjectStore(FILA,{keyPath:"id"});
+        };
+        req.onsuccess=()=>res(req.result); req.onerror=()=>rej(req.error);
+      });
+    }
+    async function salvarLocal(item){ // {id, nome, data, dataISO, bytes}
+      try{ const db=await abrirDB(); const tx=db.transaction(STORE,"readwrite"); tx.objectStore(STORE).put(item); return new Promise(r=>{tx.oncomplete=()=>r(true);tx.onerror=()=>r(false);}); }catch(e){ return false; }
+    }
+    async function listarLocal(){
+      try{ const db=await abrirDB(); const tx=db.transaction(STORE,"readonly"); const req=tx.objectStore(STORE).getAll();
+        return new Promise(r=>{ req.onsuccess=()=>r(req.result||[]); req.onerror=()=>r([]); }); }catch(e){ return []; }
+    }
+    async function limparAntigas(){ // remove o que não é de hoje
+      try{ const hoje=new Date().toISOString().slice(0,10); const db=await abrirDB();
+        const tx=db.transaction(STORE,"readwrite"); const st=tx.objectStore(STORE); const req=st.getAll();
+        req.onsuccess=()=>{ (req.result||[]).forEach(it=>{ if((it.dataISO||"").slice(0,10)!==hoje) st.delete(it.id); }); };
+      }catch(e){}
+    }
+    // --- FILA de envio (DTS pendentes de sincronização) ---
+    async function filaAdd(item){ // {id, registro, colaboradores, nome, bytes}
+      try{ const db=await abrirDB(); const tx=db.transaction(FILA,"readwrite"); tx.objectStore(FILA).put(item); return new Promise(r=>{tx.oncomplete=()=>r(true);tx.onerror=()=>r(false);}); }catch(e){ return false; }
+    }
+    async function filaListar(){
+      try{ const db=await abrirDB(); const tx=db.transaction(FILA,"readonly"); const req=tx.objectStore(FILA).getAll();
+        return new Promise(r=>{ req.onsuccess=()=>r(req.result||[]); req.onerror=()=>r([]); }); }catch(e){ return []; }
+    }
+    async function filaRemover(id){
+      try{ const db=await abrirDB(); const tx=db.transaction(FILA,"readwrite"); tx.objectStore(FILA).delete(id); return new Promise(r=>{tx.oncomplete=()=>r(true);tx.onerror=()=>r(false);}); }catch(e){ return false; }
+    }
+    function fmtHora(d){ return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"); }
+
+    function PillGroup({ options, selected, onToggle }) {
+      return (<div className="pills">{options.map(o=>(
+        <div key={o} className={"pill"+(selected.includes(o)?" on":"")} onClick={()=>onToggle(o)}>{o}</div>
+      ))}</div>);
+    }
+    function OutroField({ value, onChange }) {
+      const [open,setOpen]=useState(!!value);
+      return (<div>
+        <div className="pills" style={{marginTop:8}}><div className="pill outro" onClick={()=>setOpen(!open)}>+ Outros</div></div>
+        {open && <input type="text" className="outro-input" placeholder="Descreva..." value={value} onChange={e=>onChange(e.target.value)} />}
+      </div>);
+    }
+
+    // --- Modal de QR code para o fiscal ---
+    function QRModal({ url, item, onClose }) {
+      const boxRef = useRef(null);
+      useEffect(()=>{
+        if(boxRef.current && window.QRCode){
+          boxRef.current.innerHTML="";
+          new window.QRCode(boxRef.current, { text:url, width:240, height:240, correctLevel: window.QRCode.CorrectLevel.M });
+        }
+      },[url]);
+      return (
+        <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,zIndex:1000}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:14,padding:24,maxWidth:340,width:"100%",textAlign:"center"}}>
+            <h3 style={{margin:"0 0 4px",color:"#185FA5"}}>QR code para o fiscal</h3>
+            <p style={{fontSize:13,color:"#666",margin:"0 0 16px"}}>Peça ao fiscal para apontar a câmera. O link abre o PDF e vale por 24 horas.</p>
+            <div ref={boxRef} style={{display:"flex",justifyContent:"center",marginBottom:8}}></div>
+            <p style={{fontSize:11,color:"#999",wordBreak:"break-all",margin:"8px 0 16px"}}>{(item&&item.nome)||"DTS"}</p>
+            <button className="btn btn-blue" style={{width:"100%"}} onClick={onClose}>Fechar</button>
+          </div>
+        </div>
+      );
+    }
+
+    // --- Modal de QR code para compartilhar o acesso ao app ---
+    function QRAppModal({ onClose }) {
+      const boxRef = useRef(null);
+      const appUrl = window.location.origin + window.location.pathname;
+      const [copiado,setCopiado]=useState(false);
+      useEffect(()=>{
+        if(boxRef.current && window.QRCode){
+          boxRef.current.innerHTML="";
+          new window.QRCode(boxRef.current, { text:appUrl, width:240, height:240, correctLevel: window.QRCode.CorrectLevel.M });
+        }
+      },[appUrl]);
+      const copiar=()=>{
+        const done=()=>{ setCopiado(true); setTimeout(()=>setCopiado(false),1800); };
+        if(navigator.clipboard && navigator.clipboard.writeText){
+          navigator.clipboard.writeText(appUrl).then(done).catch(done);
+        } else { done(); }
+      };
+      return (
+        <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,zIndex:1000}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:14,padding:24,maxWidth:340,width:"100%",textAlign:"center"}}>
+            <h3 style={{margin:"0 0 4px",color:"#185FA5"}}>Acesso ao app</h3>
+            <p style={{fontSize:13,color:"#666",margin:"0 0 16px"}}>Aponte a câmera do celular para abrir o app. Use para compartilhar o acesso com a equipe.</p>
+            <div ref={boxRef} style={{display:"flex",justifyContent:"center",marginBottom:12}}></div>
+            <p style={{fontSize:11,color:"#999",wordBreak:"break-all",margin:"0 0 16px"}}>{appUrl}</p>
+            <button className="btn btn-light" style={{width:"100%",marginBottom:8}} onClick={copiar}>{copiado?"Link copiado ✓":"Copiar link"}</button>
+            <button className="btn btn-blue" style={{width:"100%"}} onClick={onClose}>Fechar</button>
+          </div>
+        </div>
+      );
+    }
+
+    // --- Canvas de rubrica ---
+    function RubricaModal({ onClose, onSave }) {
+      const canvasRef = useRef(null);
+      const drawing = useRef(false);
+      useEffect(()=>{
+        const c=canvasRef.current; const ctx=c.getContext("2d");
+        ctx.strokeStyle="#0a1a3a"; ctx.lineWidth=2.2; ctx.lineCap="round"; ctx.lineJoin="round";
+      },[]);
+      const pos=(e)=>{ const c=canvasRef.current; const r=c.getBoundingClientRect();
+        const t=e.touches?e.touches[0]:e; return { x:(t.clientX-r.left)*(c.width/r.width), y:(t.clientY-r.top)*(c.height/r.height) }; };
+      const start=(e)=>{ e.preventDefault(); drawing.current=true; const ctx=canvasRef.current.getContext("2d"); const p=pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); };
+      const move=(e)=>{ if(!drawing.current)return; e.preventDefault(); const ctx=canvasRef.current.getContext("2d"); const p=pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); };
+      const end=()=>{ drawing.current=false; };
+      const limpar=()=>{ const c=canvasRef.current; c.getContext("2d").clearRect(0,0,c.width,c.height); };
+      const salvar=()=>{ onSave(canvasRef.current.toDataURL("image/png")); };
+      return (<div className="modal-bg" onClick={onClose}>
+        <div className="modal" onClick={e=>e.stopPropagation()}>
+          <h3>Rubrica</h3>
+          <p style={{fontSize:12,color:"#888",margin:"0 0 8px"}}>Desenhe a rubrica com o dedo</p>
+          <canvas ref={canvasRef} width="320" height="120" className="rubrica-canvas" style={{width:"100%",height:120}}
+            onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}
+            onTouchStart={start} onTouchMove={move} onTouchEnd={end}></canvas>
+          <div style={{display:"flex",gap:8,marginTop:12}}>
+            <button className="btn btn-light" style={{flex:1}} onClick={limpar}>Limpar</button>
+            <button className="btn btn-light" style={{flex:1}} onClick={onClose}>Cancelar</button>
+            <button className="btn btn-blue" style={{flex:1}} onClick={salvar}>Salvar</button>
+          </div>
+        </div>
+      </div>);
+    }
+
+    function App({ onVoltar }) {
+      const agora = useRef(new Date());
+      const [numeroOs,setNumeroOs]=useState("");
+      const [elaborador,setElaborador]=useState("");
+      const [lider,setLider]=useState("");
+      const [area,setArea]=useState("");
+      const [atividade,setAtividade]=useState(""); // EM BRANCO agora
+      const [local,setLocal]=useState("");
+
+      // tipo de equipe: "igua" ou "contratada"; empresa selecionada/digitada
+      const CONTRATADAS=["Grupo Solution"];
+      const [tipoEquipe,setTipoEquipe]=useState("contratada"); // padrão: contratada
+      const [empresa,setEmpresa]=useState("Grupo Solution"); // empresa quando contratada
+      const [empresaOutra,setEmpresaOutra]=useState(""); // quando escolhe "Outra"
+      const empresaEfetiva = tipoEquipe==="igua" ? "" : (empresa==="__outra__" ? empresaOutra : empresa);
+
+      const [criticas,setCriticas]=useState([]);
+      // etapas selecionadas; por etapa, riscos selecionados {riscoNome: {nivel, controle:[], protecao:[], suporte:[]}}
+      const [etapasSel,setEtapasSel]=useState({}); // {etapaId:true}
+      const [riscoSel,setRiscoSel]=useState({});   // {etapaId__risco: {nivel, c:[], p:[], s:[]}}
+      const [etapasOutras,setEtapasOutras]=useState([]); // [{nome,risco,nivel,ctrl,prot,sup}]
+      const [riscosManuais,setRiscosManuais]=useState({}); // {etapaId: [{risco,nivel,ctrl,prot,sup}]}
+      const [epis,setEpis]=useState([]);
+      const [outros,setOutros]=useState({});
+      const setOutro=(k,v)=>setOutros(o=>({...o,[k]:v}));
+
+      const [nomeTmp,setNomeTmp]=useState("");
+      const [equipe,setEquipe]=useState([]); // [{nome, rubrica}]
+      const [rubricaIdx,setRubricaIdx]=useState(null);
+
+      const [toast,setToast]=useState(null);
+      const [salvando,setSalvando]=useState(false);
+      const [recentes,setRecentes]=useState([]);
+      const [pendentes,setPendentes]=useState(0);
+
+      // sincroniza a fila de pendentes com o Supabase
+      async function sincronizarPendentes(){
+        if(!navigator.onLine) return;
+        const fila=await filaListar();
+        if(!fila.length){ setPendentes(0); return; }
+        let enviadas=0;
+        for(const item of fila){
+          try{
+            // recalcula revisão no momento do envio (mesma OS no mesmo dia)
+            let registro=item.registro;
+            if(item.osBase && item.dataAtividade){
+              try{
+                const { data:ex }=await supa.from("dts").select("id").eq("numero_os_base",item.osBase).eq("data_atividade",item.dataAtividade);
+                const n=(ex||[]).length;
+                const osEf = n>0 ? item.osBase+" Rev."+String(n).padStart(2,"0") : item.osBase;
+                registro={...item.registro, numero_os:osEf, numero_os_base:item.osBase};
+              }catch(_){}
+            }
+            const res=await enviarRegistroCompleto(registro, item.colaboradores, item.bytes, item.osNome);
+            try{ const locais=await listarLocal(); const loc=locais.find(l=>l.id===item.id);
+              if(loc){ loc.pdf_path=res.pdf_path; await salvarLocal(loc); } }catch(_){}
+            await filaRemover(item.id);
+            enviadas++;
+          }catch(e){ /* mantém na fila para a próxima tentativa */ }
+        }
+        if(enviadas>0) setRecentes(await listarLocal());
+        const resto=(await filaListar()).length;
+        setPendentes(resto);
+        if(enviadas>0) mostraToast(enviadas+" DTS pendente(s) enviada(s) ao administrador.");
+      }
+
+      useEffect(()=>{
+        (async()=>{ await limparAntigas(); setRecentes(await listarLocal()); setPendentes((await filaListar()).length); await sincronizarPendentes(); })();
+        const aoReconectar=()=> sincronizarPendentes();
+        window.addEventListener("online", aoReconectar);
+        return ()=> window.removeEventListener("online", aoReconectar);
+      },[]);
+
+      const baixarRecente=(item)=>{
+        try{ const blob=new Blob([item.bytes],{type:"application/pdf"}); const url=URL.createObjectURL(blob);
+          const a=document.createElement("a"); a.href=url; a.download=item.nome;
+          document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+        }catch(e){ mostraToast("Erro ao abrir o arquivo",true); }
+      };
+
+      const visualizarRecente=(item)=>{
+        try{ const blob=new Blob([item.bytes],{type:"application/pdf"}); const url=URL.createObjectURL(blob);
+          window.open(url,"_blank"); setTimeout(()=>URL.revokeObjectURL(url),60000);
+        }catch(e){ mostraToast("Erro ao abrir o arquivo",true); }
+      };
+
+      // QR code para o fiscal: gera link temporário (24h) do PDF e mostra o QR
+      const [qrModal,setQrModal]=useState(null); // {url, item} ou null
+      async function gerarQR(item){
+        if(!item.pdf_path){ mostraToast("Esta DTS ainda não foi enviada ao servidor. Conecte à internet e tente de novo.",true); return; }
+        if(!navigator.onLine){ mostraToast("Sem internet. O QR precisa de conexão para ser gerado.",true); return; }
+        try{
+          const { data, error }=await supa.storage.from("dts-pdfs").createSignedUrl(item.pdf_path, 60*60*24); // 24h
+          if(error||!data){ throw error||new Error("falha ao gerar link"); }
+          setQrModal({ url:data.signedUrl, item });
+        }catch(e){ mostraToast("Erro ao gerar QR: "+e.message,true); }
+      }
+
+      const duplicar=(item)=>{
+        const d=item.dados;
+        if(!d){ mostraToast("Esta DTS não pode ser duplicada (sem dados salvos).",true); return; }
+        setNumeroOs(d.numeroOs||""); setElaborador(d.elaborador||""); setLider(d.lider||"");
+        setArea(d.area||""); setAtividade(d.atividade||""); setLocal(d.local||"");
+        setTipoEquipe(d.tipoEquipe||"contratada"); setEmpresa(d.empresa||"Grupo Solution"); setEmpresaOutra(d.empresaOutra||"");
+        setCriticas(d.criticas||[]); setEtapasSel(d.etapasSel||{}); setRiscoSel(d.riscoSel||{});
+        setEtapasOutras(d.etapasOutras||[]); setRiscosManuais(d.riscosManuais||{});
+        setEpis(d.epis||[]); setOutros(d.outros||{});
+        // equipe volta com os nomes, mas SEM rubrica (cada um precisa rubricar de novo)
+        setEquipe((d.equipe||[]).map(m=>({nome:m.nome, rubrica:null})));
+        window.scrollTo(0,0);
+        mostraToast("DTS duplicada! Revise os dados e colha as rubricas novamente.");
+      };
+
+      const mostraToast=(msg,err)=>{ setToast({msg,err}); setTimeout(()=>setToast(null),3000); };
+
+      const toggleEtapa=(id)=> setEtapasSel(s=>{ const n={...s}; if(n[id])delete n[id]; else n[id]=true; return n; });
+      const riscoKey=(eid,r)=> eid+"__"+r;
+      const toggleRisco=(eid,risco)=> setRiscoSel(s=>{ const k=riscoKey(eid,risco.nome); const n={...s};
+        if(n[k]) delete n[k]; else n[k]={nivel:risco.nivel,c:[],p:[],s:[],co:"",po:"",so:""}; return n; });
+      const setNivel=(eid,nome,nivel)=> setRiscoSel(s=>({...s,[riscoKey(eid,nome)]:{...s[riscoKey(eid,nome)],nivel}}));
+      const toggleBarreira=(eid,nome,tipo,val)=> setRiscoSel(s=>{ const k=riscoKey(eid,nome); const cur=s[k]; const arr=cur[tipo];
+        const na = arr.includes(val)?arr.filter(x=>x!==val):[...arr,val]; return {...s,[k]:{...cur,[tipo]:na}}; });
+      const setOutroBarreira=(eid,nome,campo,val)=> setRiscoSel(s=>{ const k=riscoKey(eid,nome); return {...s,[k]:{...s[k],[campo]:val}}; });
+
+      const toggleEpi=(v)=> setEpis(a=>a.includes(v)?a.filter(x=>x!==v):[...a,v]);
+
+      // riscos manuais por etapa
+      const addRiscoManual=(eid)=> setRiscosManuais(m=>({...m,[eid]:[...(m[eid]||[]),{risco:"",nivel:"M",ctrl:"",prot:"",sup:""}]}));
+      const updRiscoManual=(eid,idx,campo,val)=> setRiscosManuais(m=>({...m,[eid]:(m[eid]||[]).map((x,i)=>i===idx?{...x,[campo]:val}:x)}));
+      const delRiscoManual=(eid,idx)=> setRiscosManuais(m=>({...m,[eid]:(m[eid]||[]).filter((_,i)=>i!==idx)}));
+
+      const addNome=()=>{ const v=nomeTmp.trim(); if(!v)return; setEquipe([...equipe,{nome:v,rubrica:null}]); setNomeTmp(""); };
+      const setRubrica=(idx,dataUrl)=> setEquipe(eq=>eq.map((m,i)=>i===idx?{...m,rubrica:dataUrl}:m));
+
+      // monta as linhas da tabela (1 risco = 1 linha)
+      const montarLinhas=()=>{
+        const linhas=[];
+        ETAPAS.forEach(et=>{
+          if(!etapasSel[et.id]) return;
+          et.riscos.forEach(r=>{
+            const k=riscoKey(et.id,r.nome); const sel=riscoSel[k];
+            if(!sel) return;
+            const junta=(arr,outro)=> [...arr, ...(outro?[outro]:[])].join(", ");
+            linhas.push({ passo:et.nome, risco:r.nome, nivel:sel.nivel,
+              ctrl:junta(sel.c,sel.co), prot:junta(sel.p,sel.po), sup:junta(sel.s,sel.so) });
+          });
+          // riscos manuais adicionados nesta etapa
+          (riscosManuais[et.id]||[]).forEach(rm=>{
+            if(!rm.risco && !rm.ctrl && !rm.prot && !rm.sup) return;
+            linhas.push({ passo:et.nome, risco:rm.risco||"", nivel:rm.nivel||"M",
+              ctrl:rm.ctrl||"", prot:rm.prot||"", sup:rm.sup||"" });
+          });
+        });
+        // etapas customizadas (Outros)
+        etapasOutras.forEach(e=>{
+          if(!e.nome && !e.risco) return;
+          linhas.push({ passo:e.nome||"", risco:e.risco||"", nivel:e.nivel||"M",
+            ctrl:e.ctrl||"", prot:e.prot||"", sup:e.sup||"" });
+        });
+        return linhas;
+      };
+
+      // monta o objeto do registro da DTS (sem enviar)
+      function montarRegistro(){
+        const linhas=montarLinhas();
+        return {
+          numero_os:numeroOs,
+          data_atividade: agora.current.toISOString().slice(0,10),
+          horario_emissao: fmtHora(agora.current),
+          elaborador, lider_frente:lider, area_setor:area, atividade, localizacao:local,
+          tipo_equipe:tipoEquipe, empresa:empresaEfetiva,
+          atividades_criticas:criticas,
+          riscos: linhas.map(l=>({passo:l.passo,nome:l.risco,nivel:l.nivel,controle:l.ctrl,protecao:l.prot,suporte:l.sup})),
+          epis,
+          barreiras_controle: linhas.map(l=>l.ctrl).filter(Boolean),
+          barreiras_protecao: linhas.map(l=>l.prot).filter(Boolean),
+          barreiras_suporte: linhas.map(l=>l.sup).filter(Boolean),
+          outros, status:"finalizada"
+        };
+      }
+
+      // envia um registro + colaboradores + PDF ao Supabase. Retorna o id ou lança erro.
+      async function enviarRegistroCompleto(registro, colaboradores, bytes, osNome){
+        // 1) sobe o PDF PRIMEIRO. Se falhar, lança erro e a DTS vai para a fila (não entra incompleta).
+        const nome = "DTS_"+(osNome||"sem_os")+"_"+Date.now()+".pdf";
+        const { error:e3 } = await supa.storage.from("dts-pdfs").upload(nome, new Blob([bytes],{type:"application/pdf"}), { upsert:true, contentType:"application/pdf" });
+        if(e3) throw e3; // sem PDF garantido, não insere o registro
+        // 2) insere o registro JÁ com o pdf_path
+        const { data:ins, error } = await supa.from("dts").insert({...registro, pdf_path:nome}).select().single();
+        if(error){
+          // registro falhou: remove o PDF órfão do Storage para não acumular lixo
+          try{ await supa.storage.from("dts-pdfs").remove([nome]); }catch(_){}
+          throw error;
+        }
+        // 3) colaboradores
+        if(colaboradores && colaboradores.length){
+          const rows=colaboradores.map((nome,i)=>({dts_id:ins.id,nome,ordem:i}));
+          const { error:e2 } = await supa.from("dts_colaborador").insert(rows);
+          if(e2) throw e2;
+        }
+        return { id: ins.id, pdf_path: nome };
+      }
+
+      async function gerarPDF(osEfetiva){
+        const osMostrar = osEfetiva || numeroOs;
+        const { PDFDocument, rgb, StandardFonts } = PDFLib;
+        const H=612;
+        let templateBytes;
+        try{ const resp=await fetch("modelo_dts.pdf"); if(!resp.ok)throw new Error("HTTP "+resp.status); templateBytes=await resp.arrayBuffer(); }
+        catch(e){ mostraToast("Não achei o modelo_dts.pdf na pasta do app",true); return; }
+        const pdfDoc=await PDFDocument.load(templateBytes);
+        const font=await pdfDoc.embedFont(StandardFonts.Helvetica);
+        const fontB=await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+        const pages=pdfDoc.getPages(); const p1=pages[0];
+        const put=(pg,x,top,s,size,bold)=> pg.drawText(String(s==null?"":s),{x,y:H-top,size:size||7,font:bold?fontB:font,color:rgb(0,0,0)});
+        // cobre uma área com retângulo branco (para ocultar os tracejados ___/___/___)
+        const cobrir=(pg,x,top,w,h)=> pg.drawRectangle({x, y:H-top-h+2, width:w, height:h, color:rgb(1,1,1)});
+
+        // cabeçalho (função reutilizável - usada na p1 e nas páginas de continuação)
+        const desenharCabecalho=(pg)=>{
+          // Unidade: marca Iguá OU Contratada conforme a escolha
+          if(tipoEquipe==="igua"){
+            put(pg,78,120.5,"X",8,true); // checkbox Iguá Saneamento
+          }else{
+            put(pg,178,121,"X",8,true); // checkbox Contratada
+            put(pg,295,119,empresaEfetiva,7); // nome da empresa
+          }
+          cobrir(pg,39,131,98,9);   put(pg,42,137,fmtData(agora.current),8);   // DATA
+          cobrir(pg,294,131,45,9);  put(pg,297,137,fmtHora(agora.current),8);  // HORA
+          put(pg,380,136,osMostrar,7);
+          put(pg,120,152,elaborador,7);
+          put(pg,250,169,area,7);
+          put(pg,110,186,lider,7);
+          put(pg,125,202,atividade,7);
+          put(pg,580,203,local,7);
+          const cb={ "Escavação":[503,135.5],"Içamento de carga":[573.5,135.5],"Trabalho a quente":[667.6,135.5],
+            "Eletricidade":[503,152],"Espaço confinado":[573.5,152],"Trabalho em altura":[667.6,152],"Mergulho":[503,168.7] };
+          criticas.forEach(k=>{ if(cb[k]) put(pg,cb[k][0],cb[k][1],"X",8,true); });
+          // conserta a borda esquerda que falta no template (entre top~143 e top~159)
+          pg.drawLine({ start:{x:17.9, y:H-142}, end:{x:17.9, y:H-159.5}, thickness:1, color:rgb(0,0,0) });
+        };
+        desenharCabecalho(p1);
+
+        // tabela - texto quebra em linhas, ancorado na GRADE REAL do formulário
+        const colPasso=22,colRisco=188,colNivel=308,colCtrl=352,colProt=487,colSup=623;
+        const colW={passo:158,risco:92,ctrl:128,prot:130,sup:145}; // largura util de cada coluna (pt)
+        const GRID_TOP=253.3;      // topo da 1a linha de dados (medido no formulário)
+        const GRID_H=12.85;        // altura real de cada linha da grade
+        const GRID_N=20;           // total de linhas disponiveis
+        const fsz=6;
+        const baseY=8.6;           // deslocamento do texto dentro da linha da grade (centraliza)
+
+        // quebra texto em linhas que cabem em maxWidth (Helvetica fsz)
+        const wrap=(s,maxWidth)=>{
+          if(!s) return [""];
+          const words=String(s).split(/\s+/); const out=[]; let cur="";
+          words.forEach(w=>{
+            const test=cur?cur+" "+w:w;
+            if(font.widthOfTextAtSize(test,fsz)<=maxWidth) cur=test;
+            else { if(cur)out.push(cur);
+              if(font.widthOfTextAtSize(w,fsz)>maxWidth){ let part="";
+                for(const ch of w){ if(font.widthOfTextAtSize(part+ch,fsz)<=maxWidth)part+=ch; else {out.push(part);part=ch;} }
+                cur=part;
+              } else cur=w; }
+          });
+          if(cur)out.push(cur);
+          return out.length?out:[""];
+        };
+
+        const linhas=montarLinhas();
+        if(epis.length) linhas.push({passo:"",risco:"",nivel:"",ctrl:"",prot:"EPIs em uso: "+epis.join(", "),sup:""});
+        if(outros.epis) linhas.push({passo:"",risco:"",nivel:"",ctrl:"",prot:"EPIs (outros): "+outros.epis,sup:""});
+
+        // Suporte a PÁGINAS DE CONTINUAÇÃO: quando a tabela passa de GRID_N linhas,
+        // inserimos uma cópia da página 1 (grade vazia) entre a tabela e a pág. de assinaturas.
+        // Guardamos o índice onde inserir a próxima continuação (logo antes da pág. de assinaturas).
+        let paginaTabela=p1;            // página onde estamos desenhando a tabela
+        let gridRow=0;                  // linha atual da grade na página corrente
+        let idxInsercao=1;              // posição para inserir a próxima continuação (antes da pág 2 original)
+
+        async function novaPaginaContinuacao(){
+          // copia a página 1 do PRÓPRIO documento (já tem a grade); como ainda não escrevemos
+          // texto fora da p1, copiamos do template recarregado para vir limpa.
+          const tpl=await PDFDocument.load(templateBytes);
+          const [pg]=await pdfDoc.copyPages(tpl,[0]);
+          pdfDoc.insertPage(idxInsercao, pg);
+          idxInsercao++;                // a próxima continuação vai depois desta
+          gridRow=0;
+          desenharCabecalho(pg);        // repete OS, data, setor, endereço, etc.
+          return pg;
+        }
+
+        for(let li=0; li<linhas.length; li++){
+          const ln=linhas[li];
+          const cells={
+            passo:wrap(ln.passo,colW.passo), risco:wrap(ln.risco,colW.risco),
+            ctrl:wrap(ln.ctrl,colW.ctrl), prot:wrap(ln.prot,colW.prot), sup:wrap(ln.sup,colW.sup)
+          };
+          const nSub=Math.max(cells.passo.length,cells.risco.length,cells.ctrl.length,cells.prot.length,cells.sup.length,1);
+          if(gridRow+nSub>GRID_N){
+            // enche a página atual -> cria continuação
+            paginaTabela=await novaPaginaContinuacao();
+          }
+          const pg=paginaTabela;
+          const drawCol=(arr,x)=> arr.forEach((t,k)=> put(pg,x,GRID_TOP+(gridRow+k)*GRID_H+baseY,t,fsz));
+          drawCol(cells.passo,colPasso); drawCol(cells.risco,colRisco);
+          if(ln.nivel) put(pg,colNivel,GRID_TOP+gridRow*GRID_H+baseY,ln.nivel,fsz,true);
+          drawCol(cells.ctrl,colCtrl); drawCol(cells.prot,colProt); drawCol(cells.sup,colSup);
+          gridRow += nSub;
+        }
+        // a página de assinaturas é sempre a ÚLTIMA do documento
+        const p2=pdfDoc.getPages()[pdfDoc.getPageCount()-1];
+        // grade real pág2: 1a linha de nomes top~311, altura ~13.9pt
+        const NOME_TOP=311, NOME_H=13.9, colNome=22;
+        const baseNome=9.5;        // base de texto dentro da linha
+        const assinCentro=220;     // centro horizontal da 1a coluna de assinatura
+        // DATA no cabeçalho da 1a coluna de assinaturas (cobre o ___/___/___ circulado)
+        const dataDts=fmtData(agora.current);
+        cobrir(p2,196,301,46,9);
+        const dwc=font.widthOfTextAtSize(dataDts,7);
+        put(p2,assinCentro-dwc/2,307,dataDts,7);
+        for(let i=0;i<Math.min(equipe.length,9);i++){
+          const m=equipe[i];
+          const rowTop=NOME_TOP + i*NOME_H;       // topo da linha da grade
+          put(p2,colNome,rowTop+baseNome,m.nome,7); // nome inteiro, centrado na linha
+          // rubrica centralizada na 1a coluna de assinatura, na mesma linha do nome
+          if(m.rubrica){
+            try{ const png=await pdfDoc.embedPng(m.rubrica);
+              const rw=48, rh=11;
+              const yBottom = H - (rowTop + NOME_H) + (NOME_H-rh)/2; // centra verticalmente na célula
+              p2.drawImage(png,{x:assinCentro-rw/2, y:yBottom, width:rw, height:rh}); }catch(_){}
+          }
+        }
+
+        const bytes=await pdfDoc.save();
+        const blob=new Blob([bytes],{type:"application/pdf"}); const url=URL.createObjectURL(blob);
+        const a=document.createElement("a"); a.href=url; a.download="DTS_"+(numeroOs||"sem_os")+".pdf";
+        document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+        return bytes; // devolve para upload ao Storage
+      }
+
+      async function salvarEGerar(){
+        // validação: campos obrigatórios
+        if(!numeroOs.trim()){ mostraToast("Preencha o Nº da O.S.",true); return; }
+        if(tipoEquipe==="contratada" && !empresaEfetiva.trim()){ mostraToast("Informe o nome da empresa contratada.",true); return; }
+        if(!local.trim()){ mostraToast("Preencha a Localização do trabalho (endereço).",true); return; }
+        if(!equipe.length){ mostraToast("Adicione pelo menos um colaborador na equipe.",true); return; }
+        const semRubrica=equipe.filter(m=>!m.rubrica).map(m=>m.nome);
+        if(semRubrica.length){ mostraToast("Falta a rubrica de: "+semRubrica.join(", "),true); return; }
+
+        // validação: nenhum risco pode ficar sem barreira alguma
+        const linhasV=montarLinhas();
+        const semBarreira=linhasV.filter(l=> l.risco && !l.ctrl && !l.prot && !l.sup).map(l=>l.risco);
+        if(semBarreira.length){ mostraToast("Risco sem barreira: "+semBarreira.join("; ")+". Defina ao menos uma barreira.",true); return; }
+
+        setSalvando(true);
+        try{
+          const hoje=agora.current.toISOString().slice(0,10);
+          const osBase=numeroOs.trim();
+
+          // 1) detecta revisão: quantas DTS dessa OS já existem HOJE? (só dá p/ consultar online)
+          let osEfetiva=osBase;
+          let online=navigator.onLine;
+          if(online){
+            try{
+              const { data:existentes }=await supa.from("dts").select("id").eq("numero_os_base",osBase).eq("data_atividade",hoje);
+              const n=(existentes||[]).length;
+              if(n>0) osEfetiva = osBase+" Rev."+String(n).padStart(2,"0");
+            }catch(e){ /* se a consulta falhar, segue sem rev */ }
+          }
+
+          // 2) gera o PDF com o número efetivo (com Rev se for o caso)
+          const bytes=await gerarPDF(osEfetiva);
+          if(!bytes){ setSalvando(false); return; }
+
+          const localId="local_"+Date.now();
+          const registro={...montarRegistro(), numero_os:osEfetiva, numero_os_base:osBase};
+          const colaboradores=equipe.map(m=>m.nome);
+          const osNome=osEfetiva.replace(/[^\w.-]+/g,"_")||"sem_os";
+
+          // 3) guarda cópia local "DTSs de hoje"
+          const dados={ numeroOs, elaborador, lider, area, atividade, local,
+            tipoEquipe, empresa, empresaOutra,
+            criticas, etapasSel, riscoSel, etapasOutras, riscosManuais, epis, outros,
+            equipe: colaboradores.map(nome=>({nome})) };
+          await salvarLocal({ id:localId, nome:"DTS_"+osNome+".pdf", data:fmtData(agora.current),
+            dataISO:new Date().toISOString(), atividade, bytes, dados });
+          setRecentes(await listarLocal());
+
+          // 4) envia agora; se offline ou falhar, enfileira (a revisão será recalculada ao sincronizar)
+          if(online){
+            try{
+              const res=await enviarRegistroCompleto(registro, colaboradores, bytes, osNome);
+              await salvarLocal({ id:localId, nome:"DTS_"+osNome+".pdf", data:fmtData(agora.current),
+                dataISO:new Date().toISOString(), atividade, bytes, dados, pdf_path:res.pdf_path });
+              setRecentes(await listarLocal());
+              mostraToast(osEfetiva!==osBase ? ("DTS enviada como "+osEfetiva+" (revisão).") : "DTS salva e enviada com sucesso!");
+            }catch(e){
+              await filaAdd({ id:localId, registro:{...registro,numero_os:osBase,numero_os_base:osBase}, colaboradores, osNome:osBase, bytes, osBase, dataAtividade:hoje });
+              setPendentes((await filaListar()).length);
+              mostraToast("Sem conexão estável. DTS salva e será enviada quando reconectar.");
+            }
+          }else{
+            await filaAdd({ id:localId, registro:{...registro,numero_os:osBase,numero_os_base:osBase}, colaboradores, osNome:osBase, bytes, osBase, dataAtividade:hoje });
+            setPendentes((await filaListar()).length);
+            mostraToast("Offline: DTS salva. Será enviada automaticamente ao reconectar.");
+          }
+        }catch(e){ mostraToast("Erro: "+e.message,true); }
+        finally{ setSalvando(false); }
+      }
+
+      return (<div>
+        <div className="header">
+          {onVoltar && <a onClick={onVoltar} style={{color:"#B5D4F4",cursor:"pointer",fontSize:13,display:"inline-block",marginBottom:6}}>← Início</a>}
+          <h1>DTS — Discussão de Trabalho Seguro</h1>
+          <p>Iguá Saneamento</p>
+          <p className="meta-now">Emitida em {fmtData(agora.current)} às {fmtHora(agora.current)} (automático)</p>
+          {pendentes>0 && <p className="meta-now" style={{color:"#FFD27A"}}>⏳ {pendentes} DTS aguardando envio (será enviada ao reconectar)</p>}
+        </div>
+
+        {recentes.length>0 && (
+          <div className="section" style={{background:"#f0f6fc"}}>
+            <h2>DTSs de hoje (neste aparelho)</h2>
+            <p className="hint">Baixe novamente caso tenha esquecido. Some ao limpar os dados do navegador ou trocar de aparelho.</p>
+            {recentes.map(item=>(
+              <div key={item.id} className="team-item" style={{background:"#fff"}}>
+                <span className="nome">{item.nome}<br/><span style={{fontSize:11,color:"#999"}}>{item.atividade||""} · {item.data}</span></span>
+                <button className="btn btn-light" style={{fontSize:13,padding:"7px 12px"}} onClick={()=>visualizarRecente(item)}>Visualizar</button>
+                <button className="btn btn-light" style={{fontSize:13,padding:"7px 12px"}} onClick={()=>baixarRecente(item)}>Baixar</button>
+                <button className="btn btn-light" style={{fontSize:13,padding:"7px 12px"}} onClick={()=>duplicar(item)}>Duplicar</button>
+                <button className="btn btn-blue" style={{fontSize:13,padding:"7px 12px"}} onClick={()=>gerarQR(item)}>QR fiscal</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="section">
+          <h2>Dados gerais</h2>
+          <label>Tipo de equipe</label>
+          <div style={{display:"flex",gap:10,marginBottom:12}}>
+            <button className={"btn "+(tipoEquipe==="igua"?"btn-blue":"btn-light")} style={{flex:1}} onClick={()=>setTipoEquipe("igua")}>Iguá Saneamento</button>
+            <button className={"btn "+(tipoEquipe==="contratada"?"btn-blue":"btn-light")} style={{flex:1}} onClick={()=>setTipoEquipe("contratada")}>Contratada</button>
+          </div>
+          {tipoEquipe==="contratada" && (
+            <div style={{marginBottom:12}}>
+              <label>Empresa contratada</label>
+              <select value={empresa} onChange={e=>setEmpresa(e.target.value)}
+                style={{width:"100%",padding:10,fontSize:15,border:"1px solid #ccc",borderRadius:8,background:"#fff"}}>
+                {CONTRATADAS.map(c=><option key={c} value={c}>{c}</option>)}
+                <option value="__outra__">Outra (digitar)</option>
+              </select>
+              {empresa==="__outra__" &&
+                <input type="text" value={empresaOutra} onChange={e=>setEmpresaOutra(e.target.value)} placeholder="Nome da empresa" style={{marginTop:8}} />}
+            </div>
+          )}
+          <div className="field-row">
+            <div><label>Nº O.S.</label><input type="text" value={numeroOs} onChange={e=>setNumeroOs(e.target.value)} placeholder="Ex: 12345" /></div>
+            <div><label>Área / Setor</label><input type="text" value={area} onChange={e=>setArea(e.target.value)} /></div>
+          </div>
+          <label>Atividade a ser executada</label>
+          <input type="text" value={atividade} onChange={e=>setAtividade(e.target.value)} placeholder="Descreva a atividade do dia" />
+          <label>Localização do trabalho</label>
+          <input type="text" value={local} onChange={e=>setLocal(e.target.value)} placeholder="Endereço / trecho" />
+          <label>Elaborador da DTS</label>
+          <input type="text" value={elaborador} onChange={e=>setElaborador(e.target.value)} />
+          <label>Líder da frente de serviço</label>
+          <input type="text" value={lider} onChange={e=>setLider(e.target.value)} />
+        </div>
+
+        <div className="section">
+          <h2>Atividades críticas (requer PT)</h2>
+          <PillGroup options={CRITICAS} selected={criticas} onToggle={v=>setCriticas(a=>a.includes(v)?a.filter(x=>x!==v):[...a,v])} />
+        </div>
+
+        <div className="section">
+          <h2>Etapas do trabalho</h2>
+          <p className="hint">Marque as etapas do serviço; depois selecione os riscos e as barreiras de cada uma</p>
+          {ETAPAS.map(et=>(
+            <div key={et.id} className="etapa">
+              <div className={"etapa-head"+(etapasSel[et.id]?" on":"")} onClick={()=>toggleEtapa(et.id)}>
+                <div className="etapa-check">{etapasSel[et.id]?"✓":""}</div>
+                <span>{et.nome}</span>
+              </div>
+              {etapasSel[et.id] && (
+                <div className="etapa-body">
+                  {et.riscos.map(r=>{
+                    const k=riscoKey(et.id,r.nome); const sel=riscoSel[k];
+                    return (<div key={r.nome} className="risco-card">
+                      <div className={"risco-head"+(sel?" on":"")} onClick={()=>toggleRisco(et.id,r)}>
+                        <div className="risco-chk">{sel?"✓":""}</div>
+                        <span className="risco-nome">{r.nome}</span>
+                        {sel && <div className="nivel-btns" onClick={e=>e.stopPropagation()}>
+                          <button className={"nivel-btn B"+(sel.nivel==="B"?" sel":"")} onClick={()=>setNivel(et.id,r.nome,"B")}>B</button>
+                          <button className={"nivel-btn M"+(sel.nivel==="M"?" sel":"")} onClick={()=>setNivel(et.id,r.nome,"M")}>M</button>
+                          <button className={"nivel-btn A"+(sel.nivel==="A"?" sel":"")} onClick={()=>setNivel(et.id,r.nome,"A")}>A</button>
+                        </div>}
+                      </div>
+                      {sel && <div className="barreiras-box">
+                        {[["controle","c","Barreiras de controle","co"],["protecao","p","Barreiras de proteção","po"],["suporte","s","Barreiras de suporte","so"]].map(([campo,key,tit,okey])=>(
+                          <div key={key} className="barreira-grupo">
+                            <div className="tit">{tit}</div>
+                            <div className="pills">{r[campo].map(b=>(
+                              <div key={b} className={"pill"+(sel[key].includes(b)?" on":"")} onClick={()=>toggleBarreira(et.id,r.nome,key,b)}>{b}</div>
+                            ))}</div>
+                            <input type="text" value={sel[okey]||""} onChange={ev=>setOutroBarreira(et.id,r.nome,okey,ev.target.value)}
+                              placeholder="+ Outra barreira (opcional)" style={{marginTop:6,marginBottom:0,fontSize:13,padding:8}} />
+                          </div>
+                        ))}
+                      </div>}
+                    </div>);
+                  })}
+
+                  {/* Riscos manuais adicionados nesta etapa */}
+                  {(riscosManuais[et.id]||[]).map((rm,ri)=>(
+                    <div key={"rm"+ri} className="risco-card" style={{borderStyle:"dashed",padding:"10px 12px"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                        <span style={{fontSize:12,fontWeight:500,color:"#185FA5"}}>Risco adicional {ri+1}</span>
+                        <button className="del" style={{border:"none",background:"none",color:"#c00",fontSize:18,cursor:"pointer"}} onClick={()=>delRiscoManual(et.id,ri)}>×</button>
+                      </div>
+                      <input type="text" value={rm.risco} onChange={e=>updRiscoManual(et.id,ri,"risco",e.target.value)} placeholder="Risco" />
+                      <div className="nivel-btns" style={{marginBottom:10}}>
+                        <button className={"nivel-btn B"+(rm.nivel==="B"?" sel":"")} onClick={()=>updRiscoManual(et.id,ri,"nivel","B")}>B</button>
+                        <button className={"nivel-btn M"+(rm.nivel==="M"?" sel":"")} onClick={()=>updRiscoManual(et.id,ri,"nivel","M")}>M</button>
+                        <button className={"nivel-btn A"+(rm.nivel==="A"?" sel":"")} onClick={()=>updRiscoManual(et.id,ri,"nivel","A")}>A</button>
+                      </div>
+                      <input type="text" value={rm.ctrl} onChange={e=>updRiscoManual(et.id,ri,"ctrl",e.target.value)} placeholder="Barreiras de controle (separe por vírgula)" />
+                      <input type="text" value={rm.prot} onChange={e=>updRiscoManual(et.id,ri,"prot",e.target.value)} placeholder="Barreiras de proteção (separe por vírgula)" />
+                      <input type="text" value={rm.sup} onChange={e=>updRiscoManual(et.id,ri,"sup",e.target.value)} placeholder="Barreiras de suporte (separe por vírgula)" />
+                    </div>
+                  ))}
+                  <button className="btn btn-light" style={{width:"100%",marginTop:4,borderStyle:"dashed"}} onClick={()=>addRiscoManual(et.id)}>
+                    + Adicionar outro risco a esta etapa
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {/* Etapas customizadas (Outros) */}
+          {etapasOutras.map((e,idx)=>{
+            const upd=(campo,val)=> setEtapasOutras(arr=>arr.map((x,i)=>i===idx?{...x,[campo]:val}:x));
+            return (<div key={"outra"+idx} className="etapa" style={{borderStyle:"dashed"}}>
+              <div className="etapa-head on" style={{justifyContent:"space-between"}}>
+                <span>Etapa adicional {idx+1}</span>
+                <button className="del" style={{color:"#fff",background:"none",border:"none",fontSize:18}} onClick={()=>setEtapasOutras(arr=>arr.filter((_,i)=>i!==idx))}>×</button>
+              </div>
+              <div className="etapa-body">
+                <label>Nome da etapa</label>
+                <input type="text" value={e.nome} onChange={ev=>upd("nome",ev.target.value)} placeholder="Ex: Limpeza final da via" />
+                <label>Risco</label>
+                <input type="text" value={e.risco} onChange={ev=>upd("risco",ev.target.value)} placeholder="Descreva o risco" />
+                <label>Nível</label>
+                <div className="nivel-btns" style={{marginBottom:12}}>
+                  <button className={"nivel-btn B"+(e.nivel==="B"?" sel":"")} onClick={()=>upd("nivel","B")}>B</button>
+                  <button className={"nivel-btn M"+(e.nivel==="M"?" sel":"")} onClick={()=>upd("nivel","M")}>M</button>
+                  <button className={"nivel-btn A"+(e.nivel==="A"?" sel":"")} onClick={()=>upd("nivel","A")}>A</button>
+                </div>
+                <label>Barreiras de controle</label>
+                <input type="text" value={e.ctrl} onChange={ev=>upd("ctrl",ev.target.value)} placeholder="Separe por vírgula" />
+                <label>Barreiras de proteção</label>
+                <input type="text" value={e.prot} onChange={ev=>upd("prot",ev.target.value)} placeholder="Separe por vírgula" />
+                <label>Barreiras de suporte</label>
+                <input type="text" value={e.sup} onChange={ev=>upd("sup",ev.target.value)} placeholder="Separe por vírgula" />
+              </div>
+            </div>);
+          })}
+          <button className="btn btn-light" style={{width:"100%",marginTop:4}}
+            onClick={()=>setEtapasOutras(arr=>[...arr,{nome:"",risco:"",nivel:"M",ctrl:"",prot:"",sup:""}])}>
+            + Adicionar outra etapa
+          </button>
+        </div>
+
+        <div className="section">
+          <h2>EPIs em uso</h2>
+          <p className="hint">Selecione os equipamentos utilizados</p>
+          <PillGroup options={EPIS} selected={epis} onToggle={toggleEpi} />
+          <OutroField value={outros.epis||""} onChange={v=>setOutro("epis",v)} />
+        </div>
+
+        <div className="section">
+          <h2>Equipe (colaboradores)</h2>
+          <div className="team-add">
+            <input type="text" value={nomeTmp} onChange={e=>setNomeTmp(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addNome()} placeholder="Nome do colaborador" />
+            <button className="btn btn-light" onClick={addNome}>+ Add</button>
+          </div>
+          {equipe.map((m,i)=>(
+            <div key={i} className="team-item">
+              <span className="nome">{m.nome}</span>
+              {m.rubrica
+                ? <img src={m.rubrica} className="rubrica-mini" alt="rubrica" onClick={()=>setRubricaIdx(i)} />
+                : <button className="btn btn-light" style={{fontSize:12,padding:"6px 10px"}} onClick={()=>setRubricaIdx(i)}>Rubricar</button>}
+              <button className="del" onClick={()=>setEquipe(equipe.filter((_,j)=>j!==i))}>×</button>
+            </div>
+          ))}
+        </div>
+
+        <div className="footer-actions">
+          <button className="btn btn-blue" disabled={salvando} onClick={salvarEGerar}>{salvando?"Salvando...":"Salvar e gerar PDF"}</button>
+        </div>
+
+        {rubricaIdx!==null && <RubricaModal onClose={()=>setRubricaIdx(null)} onSave={(d)=>{ setRubrica(rubricaIdx,d); setRubricaIdx(null); }} />}
+        {qrModal && <QRModal url={qrModal.url} item={qrModal.item} onClose={()=>setQrModal(null)} />}
+        {toast && <div className={"toast"+(toast.err?" err":"")}>{toast.msg}</div>}
+      </div>);
+    }
+
+    // ============================================================
+    // PAINEL ADM (cortina de senha) - lista DTS por período e baixa PDFs
+    // ============================================================
+    // SENHA: troque o valor abaixo pela senha que você quiser.
+    // Aviso: isto é uma "cortina" visual, não proteção forte.
+    const ADM_SENHA = "GS@2026";
+
+    function PainelAdm({ onVoltar }) {
+      const [ok,setOk]=useState(false);
+      const [senha,setSenha]=useState("");
+      const [de,setDe]=useState("");
+      const [ate,setAte]=useState("");
+      const [lista,setLista]=useState([]);
+      const [carregando,setCarregando]=useState(false);
+      const [msg,setMsg]=useState("");
+
+      async function buscar(){
+        setCarregando(true); setMsg("");
+        try{
+          let q=supa.from("dts").select("id,created_at,numero_os,atividade,localizacao,lider_frente,pdf_path,data_atividade").order("created_at",{ascending:false});
+          if(de) q=q.gte("data_atividade",de);
+          if(ate) q=q.lte("data_atividade",ate);
+          const { data, error }=await q;
+          if(error) throw error;
+          setLista(data||[]);
+          if(!data || !data.length) setMsg("Nenhuma DTS encontrada no período.");
+        }catch(e){ setMsg("Erro: "+e.message); }
+        finally{ setCarregando(false); }
+      }
+
+      async function baixar(item){
+        if(!item.pdf_path){ alert("Esta DTS não tem PDF salvo (foi criada antes do Storage)."); return; }
+        try{
+          const { data, error }=await supa.storage.from("dts-pdfs").download(item.pdf_path);
+          if(error) throw error;
+          const url=URL.createObjectURL(data);
+          const a=document.createElement("a"); a.href=url; a.download=item.pdf_path;
+          document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+        }catch(e){ alert("Erro ao baixar: "+e.message); }
+      }
+
+      async function visualizar(item){
+        if(!item.pdf_path){ alert("Esta DTS não tem PDF salvo."); return; }
+        try{
+          const { data, error }=await supa.storage.from("dts-pdfs").download(item.pdf_path);
+          if(error) throw error;
+          const url=URL.createObjectURL(data);
+          window.open(url, "_blank"); // abre o PDF numa nova aba
+          // libera a memória depois de um tempo (a aba já carregou o arquivo)
+          setTimeout(()=>URL.revokeObjectURL(url), 60000);
+        }catch(e){ alert("Erro ao abrir: "+e.message); }
+      }
+
+      async function baixarTodos(){
+        const comPdf=lista.filter(i=>i.pdf_path);
+        if(!comPdf.length){ alert("Nenhum PDF disponível para baixar."); return; }
+        setCarregando(true); setMsg("Unificando "+comPdf.length+" PDFs...");
+        try{
+          const { PDFDocument }=PDFLib;
+          const unificado=await PDFDocument.create();
+          let ok=0, falhas=0;
+          for(const item of comPdf){
+            try{
+              const { data, error }=await supa.storage.from("dts-pdfs").download(item.pdf_path);
+              if(error) throw error;
+              const bytes=await data.arrayBuffer();
+              const doc=await PDFDocument.load(bytes);
+              const paginas=await unificado.copyPages(doc, doc.getPageIndices());
+              paginas.forEach(p=>unificado.addPage(p));
+              ok++;
+            }catch(e){ falhas++; console.warn("falha em",item.pdf_path,e.message); }
+          }
+          if(!ok){ setMsg("Não foi possível baixar nenhum PDF."); setCarregando(false); return; }
+          const bytesFinal=await unificado.save();
+          const blob=new Blob([bytesFinal],{type:"application/pdf"});
+          const url=URL.createObjectURL(blob);
+          // nome do arquivo com o período
+          const periodo=(de||"inicio")+"_a_"+(ate||"hoje");
+          const a=document.createElement("a"); a.href=url; a.download="DTS_periodo_"+periodo+".pdf";
+          document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+          setMsg("PDF unificado gerado com "+ok+" DTS"+(falhas?(" ("+falhas+" falharam)"):"")+".");
+        }catch(e){ setMsg("Erro ao unificar: "+e.message); }
+        finally{ setCarregando(false); }
+      }
+
+      // ---- EXCLUSÃO por período (com confirmação por senha) ----
+      async function excluirPeriodo(){
+        if(!de || !ate){ alert("Para excluir, defina o período (data De e Até)."); return; }
+        const conf = window.prompt("ATENÇÃO: esta ação é PERMANENTE.\n\nVai excluir TODAS as DTS de "+de+" até "+ate+" (registros e PDFs).\n\nDigite a senha do administrador para confirmar:");
+        if(conf===null) return; // cancelou
+        if(conf!==ADM_SENHA){ alert("Senha incorreta. Nada foi excluído."); return; }
+        setCarregando(true); setMsg("");
+        try{
+          // 1) busca as DTS do período (para pegar ids e pdf_paths)
+          let q=supa.from("dts").select("id,pdf_path");
+          if(de) q=q.gte("data_atividade",de);
+          if(ate) q=q.lte("data_atividade",ate);
+          const { data:alvos, error:e0 }=await q;
+          if(e0) throw e0;
+          if(!alvos || !alvos.length){ setMsg("Nenhuma DTS no período para excluir."); setCarregando(false); return; }
+          const ids=alvos.map(a=>a.id);
+          const paths=alvos.map(a=>a.pdf_path).filter(Boolean);
+          // 2) apaga os PDFs do Storage
+          if(paths.length){ const { error:eS }=await supa.storage.from("dts-pdfs").remove(paths); if(eS) console.warn("storage remove:",eS.message); }
+          // 3) apaga colaboradores vinculados (FK) e depois as DTS
+          await supa.from("dts_colaborador").delete().in("dts_id",ids);
+          const { error:eD }=await supa.from("dts").delete().in("id",ids);
+          if(eD) throw eD;
+          setMsg("Excluídas "+ids.length+" DTS do período.");
+          setLista([]);
+        }catch(e){ setMsg("Erro ao excluir: "+e.message); }
+        finally{ setCarregando(false); }
+      }
+
+      async function excluirUma(item){
+        const desc=(item.atividade||"DTS")+" — OS "+(item.numero_os||"-");
+        const conf=window.prompt("Excluir PERMANENTEMENTE esta DTS?\n\n"+desc+"\n\nDigite a senha do administrador para confirmar:");
+        if(conf===null) return;
+        if(conf!==ADM_SENHA){ alert("Senha incorreta. Nada foi excluído."); return; }
+        setCarregando(true); setMsg("");
+        try{
+          if(item.pdf_path){ const { error:eS }=await supa.storage.from("dts-pdfs").remove([item.pdf_path]); if(eS) console.warn("storage remove:",eS.message); }
+          await supa.from("dts_colaborador").delete().eq("dts_id",item.id);
+          const { error:eD }=await supa.from("dts").delete().eq("id",item.id);
+          if(eD) throw eD;
+          setLista(l=>l.filter(x=>x.id!==item.id));
+          setMsg("DTS excluída.");
+        }catch(e){ setMsg("Erro ao excluir: "+e.message); }
+        finally{ setCarregando(false); }
+      }
+
+      async function anexarPdf(item, file){
+        if(!file) return;
+        if(file.type!=="application/pdf" && !file.name.toLowerCase().endsWith(".pdf")){ alert("Selecione um arquivo PDF."); return; }
+        setCarregando(true); setMsg("");
+        try{
+          const bytes=await file.arrayBuffer();
+          const nome="DTS_"+(item.numero_os||"sem_os")+"_"+item.id+".pdf";
+          const { error:eS }=await supa.storage.from("dts-pdfs").upload(nome, new Blob([bytes],{type:"application/pdf"}), { upsert:true, contentType:"application/pdf" });
+          if(eS) throw eS;
+          const { error:eU }=await supa.from("dts").update({ pdf_path:nome }).eq("id", item.id);
+          if(eU) throw eU;
+          setLista(l=>l.map(x=>x.id===item.id?{...x,pdf_path:nome}:x));
+          setMsg("PDF anexado à DTS de OS "+(item.numero_os||"-")+".");
+        }catch(e){ setMsg("Erro ao anexar: "+e.message); }
+        finally{ setCarregando(false); }
+      }
+
+      if(!ok){
+        return (<div style={{maxWidth:360,margin:"60px auto",padding:24,background:"#fff",borderRadius:12}}>
+          <h2 style={{color:"#185FA5",marginTop:0}}>Painel administrativo</h2>
+          <p style={{fontSize:13,color:"#666"}}>Digite a senha para acessar os relatórios.</p>
+          <input type="password" value={senha} onChange={e=>setSenha(e.target.value)} placeholder="Senha"
+            onKeyDown={e=>e.key==="Enter"&&(senha===ADM_SENHA?setOk(true):setMsg("Senha incorreta"))}
+            style={{width:"100%",padding:10,fontSize:15,border:"1px solid #ccc",borderRadius:8,marginBottom:10}} />
+          <button className="btn btn-blue" style={{width:"100%"}}
+            onClick={()=> senha===ADM_SENHA ? setOk(true) : setMsg("Senha incorreta")}>Entrar</button>
+          {msg && <p style={{color:"#A32D2D",fontSize:13}}>{msg}</p>}
+          <p style={{fontSize:12,color:"#999",marginTop:16}}><a onClick={onVoltar} style={{color:"#185FA5",cursor:"pointer"}}>← Voltar ao início</a></p>
+        </div>);
+      }
+
+      return (<div style={{maxWidth:760,margin:"0 auto",padding:16,background:"#fff",minHeight:"100vh"}}>
+        <div className="header" style={{borderRadius:10}}>
+          <h1>Painel administrativo — DTS</h1>
+          <p>Grupo Solution · relatórios por período</p>
+        </div>
+        <div style={{padding:"16px 0"}}>
+          <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
+            <div><label>De (data)</label><input type="date" value={de} onChange={e=>setDe(e.target.value)} /></div>
+            <div><label>Até (data)</label><input type="date" value={ate} onChange={e=>setAte(e.target.value)} /></div>
+            <button className="btn btn-blue" onClick={buscar} disabled={carregando}>{carregando?"Buscando...":"Buscar"}</button>
+            {lista.length>0 && <button className="btn btn-light" onClick={baixarTodos}>Baixar todos (PDF único)</button>}
+            <button onClick={excluirPeriodo} disabled={carregando}
+              style={{padding:"11px 16px",borderRadius:8,border:"1px solid #A32D2D",background:"#fff",color:"#A32D2D",fontSize:14,fontWeight:600,cursor:"pointer"}}>
+              Excluir período
+            </button>
+          </div>
+          <p style={{fontSize:12,color:"#999",margin:"8px 0 0"}}>A exclusão remove os registros e os PDFs do período definido em "De/Até". Pede a senha do administrador para confirmar e é permanente.</p>
+          {msg && <p style={{color:"#666",fontSize:13}}>{msg}</p>}
+          <div style={{marginTop:16}}>
+            {lista.map(item=>(
+              <div key={item.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"1px solid #eee",borderRadius:8,marginBottom:8}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:14,fontWeight:500}}>{item.atividade||"(sem atividade)"} — OS {item.numero_os||"-"}</div>
+                  <div style={{fontSize:12,color:"#888"}}>{item.data_atividade||item.created_at?.slice(0,10)} · {item.localizacao||"-"} · {item.lider_frente||"-"}</div>
+                </div>
+                {item.pdf_path
+                  ? <React.Fragment>
+                      <button className="btn btn-light" style={{fontSize:13,padding:"7px 12px"}} onClick={()=>visualizar(item)}>Visualizar</button>
+                      <button className="btn btn-light" style={{fontSize:13,padding:"7px 12px"}} onClick={()=>baixar(item)}>Baixar PDF</button>
+                    </React.Fragment>
+                  : <label className="btn btn-light" style={{fontSize:13,padding:"7px 12px",cursor:"pointer"}}>
+                      Anexar PDF
+                      <input type="file" accept="application/pdf" style={{display:"none"}} onChange={e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=""; anexarPdf(item,f); }} />
+                    </label>
+                }
+                <button style={{fontSize:13,padding:"7px 10px",borderRadius:8,border:"1px solid #A32D2D",background:"#fff",color:"#A32D2D",cursor:"pointer"}} onClick={()=>excluirUma(item)} title="Excluir esta DTS">Excluir</button>
+              </div>
+            ))}
+          </div>
+        </div>
+        <p style={{fontSize:12,color:"#999"}}><a onClick={onVoltar} style={{color:"#185FA5",cursor:"pointer"}}>← Voltar ao início</a></p>
+      </div>);
+    }
+
+    // Tela inicial: escolher perfil (colaborador ou administrador)
+    function Root(){
+      const [modo,setModo]=useState("inicio"); // 'inicio' | 'colaborador' | 'adm'
+      const [qrApp,setQrApp]=useState(false);
+      if(modo==="colaborador") return <App onVoltar={()=>setModo("inicio")} />;
+      if(modo==="adm") return <PainelAdm onVoltar={()=>setModo("inicio")} />;
+      return (
+        <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+          <div className="header">
+            <h1>DTS — Discussão de Trabalho Seguro</h1>
+            <p>Iguá Saneamento</p>
+          </div>
+          <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",gap:16,padding:24,maxWidth:420,margin:"0 auto",width:"100%"}}>
+            <p style={{textAlign:"center",color:"#666",fontSize:15,margin:"0 0 8px"}}>Como você quer acessar?</p>
+            <button className="btn btn-blue" style={{padding:"18px",fontSize:16}} onClick={()=>setModo("colaborador")}>
+              Sou colaborador<br/><span style={{fontSize:12,fontWeight:400,opacity:.85}}>Preencher uma DTS</span>
+            </button>
+            <button className="btn btn-light" style={{padding:"18px",fontSize:16}} onClick={()=>setModo("adm")}>
+              Administrador<br/><span style={{fontSize:12,fontWeight:400,opacity:.7}}>Baixar relatórios por período</span>
+            </button>
+            <button onClick={()=>setQrApp(true)}
+              style={{marginTop:4,background:"none",border:"none",color:"#185FA5",fontSize:13,fontWeight:500,cursor:"pointer",display:"flex",alignItems:"center",gap:6,justifyContent:"center"}}>
+              <span style={{fontSize:15}}>▣</span> Compartilhar acesso (QR code)
+            </button>
+          </div>
+          {qrApp && <QRAppModal onClose={()=>setQrApp(false)} />}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<Root/>);
+  </script>
+</body>
+</html>
