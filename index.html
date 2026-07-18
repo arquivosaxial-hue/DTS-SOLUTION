@@ -911,7 +911,15 @@
     // Aviso: isto é uma "cortina" visual, não proteção forte.
     const ADM_SENHA = "GS@2026";
 
-    function PainelAdm({ onVoltar }) {
+    // cfg define qual documento este painel administra. Padrão = DTS (comportamento original).
+    const CFG_DTS={ tabela:"dts", colab:"dts_colaborador", fk:"dts_id", rotulo:"DTS", prefixo:"DTS",
+      colTitulo:"atividade", colLocal:"localizacao", colLider:"lider_frente",
+      select:"id,created_at,numero_os,atividade,localizacao,lider_frente,pdf_path,data_atividade" };
+    const CFG_PT_QUENTE={ tabela:"pt_quente", colab:"pt_quente_colaborador", fk:"pt_id", rotulo:"PT a Quente", prefixo:"PT_quente",
+      colTitulo:"descricao_trabalho", colLocal:"local_trabalho", colLider:"lider_atividade",
+      select:"id,created_at,numero_os,descricao_trabalho,local_trabalho,lider_atividade,pdf_path,data_atividade" };
+
+    function PainelAdm({ onVoltar, cfg=CFG_DTS }) {
       const [ok,setOk]=useState(false);
       const [senha,setSenha]=useState("");
       const [de,setDe]=useState("");
@@ -923,19 +931,19 @@
       async function buscar(){
         setCarregando(true); setMsg("");
         try{
-          let q=supa.from("dts").select("id,created_at,numero_os,atividade,localizacao,lider_frente,pdf_path,data_atividade").order("created_at",{ascending:false});
+          let q=supa.from(cfg.tabela).select(cfg.select).order("created_at",{ascending:false});
           if(de) q=q.gte("data_atividade",de);
           if(ate) q=q.lte("data_atividade",ate);
           const { data, error }=await q;
           if(error) throw error;
           setLista(data||[]);
-          if(!data || !data.length) setMsg("Nenhuma DTS encontrada no período.");
+          if(!data || !data.length) setMsg("Nenhum registro encontrado no período.");
         }catch(e){ setMsg("Erro: "+e.message); }
         finally{ setCarregando(false); }
       }
 
       async function baixar(item){
-        if(!item.pdf_path){ alert("Esta DTS não tem PDF salvo (foi criada antes do Storage)."); return; }
+        if(!item.pdf_path){ alert("Este documento não tem PDF salvo."); return; }
         try{
           const { data, error }=await supa.storage.from("dts-pdfs").download(item.pdf_path);
           if(error) throw error;
@@ -946,7 +954,7 @@
       }
 
       async function visualizar(item){
-        if(!item.pdf_path){ alert("Esta DTS não tem PDF salvo."); return; }
+        if(!item.pdf_path){ alert("Este documento não tem PDF salvo."); return; }
         try{
           const { data, error }=await supa.storage.from("dts-pdfs").download(item.pdf_path);
           if(error) throw error;
@@ -982,9 +990,9 @@
           const url=URL.createObjectURL(blob);
           // nome do arquivo com o período
           const periodo=(de||"inicio")+"_a_"+(ate||"hoje");
-          const a=document.createElement("a"); a.href=url; a.download="DTS_periodo_"+periodo+".pdf";
+          const a=document.createElement("a"); a.href=url; a.download=cfg.prefixo+"_periodo_"+periodo+".pdf";
           document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
-          setMsg("PDF unificado gerado com "+ok+" DTS"+(falhas?(" ("+falhas+" falharam)"):"")+".");
+          setMsg("PDF unificado gerado com "+ok+" "+cfg.rotulo+(falhas?(" ("+falhas+" falharam)"):"")+".");
         }catch(e){ setMsg("Erro ao unificar: "+e.message); }
         finally{ setCarregando(false); }
       }
@@ -992,45 +1000,45 @@
       // ---- EXCLUSÃO por período (com confirmação por senha) ----
       async function excluirPeriodo(){
         if(!de || !ate){ alert("Para excluir, defina o período (data De e Até)."); return; }
-        const conf = window.prompt("ATENÇÃO: esta ação é PERMANENTE.\n\nVai excluir TODAS as DTS de "+de+" até "+ate+" (registros e PDFs).\n\nDigite a senha do administrador para confirmar:");
+        const conf = window.prompt("ATENÇÃO: esta ação é PERMANENTE.\n\nVai excluir TODOS os registros de "+cfg.rotulo+" de "+de+" até "+ate+" (registros e PDFs).\n\nDigite a senha do administrador para confirmar:");
         if(conf===null) return; // cancelou
         if(conf!==ADM_SENHA){ alert("Senha incorreta. Nada foi excluído."); return; }
         setCarregando(true); setMsg("");
         try{
           // 1) busca as DTS do período (para pegar ids e pdf_paths)
-          let q=supa.from("dts").select("id,pdf_path");
+          let q=supa.from(cfg.tabela).select("id,pdf_path");
           if(de) q=q.gte("data_atividade",de);
           if(ate) q=q.lte("data_atividade",ate);
           const { data:alvos, error:e0 }=await q;
           if(e0) throw e0;
-          if(!alvos || !alvos.length){ setMsg("Nenhuma DTS no período para excluir."); setCarregando(false); return; }
+          if(!alvos || !alvos.length){ setMsg("Nenhum registro no período para excluir."); setCarregando(false); return; }
           const ids=alvos.map(a=>a.id);
           const paths=alvos.map(a=>a.pdf_path).filter(Boolean);
           // 2) apaga os PDFs do Storage
           if(paths.length){ const { error:eS }=await supa.storage.from("dts-pdfs").remove(paths); if(eS) console.warn("storage remove:",eS.message); }
           // 3) apaga colaboradores vinculados (FK) e depois as DTS
-          await supa.from("dts_colaborador").delete().in("dts_id",ids);
-          const { error:eD }=await supa.from("dts").delete().in("id",ids);
+          await supa.from(cfg.colab).delete().in(cfg.fk,ids);
+          const { error:eD }=await supa.from(cfg.tabela).delete().in("id",ids);
           if(eD) throw eD;
-          setMsg("Excluídas "+ids.length+" DTS do período.");
+          setMsg("Excluídos "+ids.length+" registros do período.");
           setLista([]);
         }catch(e){ setMsg("Erro ao excluir: "+e.message); }
         finally{ setCarregando(false); }
       }
 
       async function excluirUma(item){
-        const desc=(item.atividade||"DTS")+" — OS "+(item.numero_os||"-");
-        const conf=window.prompt("Excluir PERMANENTEMENTE esta DTS?\n\n"+desc+"\n\nDigite a senha do administrador para confirmar:");
+        const desc=((item[cfg.colTitulo])||cfg.rotulo)+" — OS "+(item.numero_os||"-");
+        const conf=window.prompt("Excluir PERMANENTEMENTE este registro?\n\n"+desc+"\n\nDigite a senha do administrador para confirmar:");
         if(conf===null) return;
         if(conf!==ADM_SENHA){ alert("Senha incorreta. Nada foi excluído."); return; }
         setCarregando(true); setMsg("");
         try{
           if(item.pdf_path){ const { error:eS }=await supa.storage.from("dts-pdfs").remove([item.pdf_path]); if(eS) console.warn("storage remove:",eS.message); }
-          await supa.from("dts_colaborador").delete().eq("dts_id",item.id);
-          const { error:eD }=await supa.from("dts").delete().eq("id",item.id);
+          await supa.from(cfg.colab).delete().eq(cfg.fk,item.id);
+          const { error:eD }=await supa.from(cfg.tabela).delete().eq("id",item.id);
           if(eD) throw eD;
           setLista(l=>l.filter(x=>x.id!==item.id));
-          setMsg("DTS excluída.");
+          setMsg("Registro excluído.");
         }catch(e){ setMsg("Erro ao excluir: "+e.message); }
         finally{ setCarregando(false); }
       }
@@ -1041,13 +1049,13 @@
         setCarregando(true); setMsg("");
         try{
           const bytes=await file.arrayBuffer();
-          const nome="DTS_"+(item.numero_os||"sem_os")+"_"+item.id+".pdf";
+          const nome=(cfg.tabela==="dts"?"":"pt/")+cfg.prefixo+"_"+(item.numero_os||"sem_os")+"_"+item.id+".pdf";
           const { error:eS }=await supa.storage.from("dts-pdfs").upload(nome, new Blob([bytes],{type:"application/pdf"}), { upsert:true, contentType:"application/pdf" });
           if(eS) throw eS;
-          const { error:eU }=await supa.from("dts").update({ pdf_path:nome }).eq("id", item.id);
+          const { error:eU }=await supa.from(cfg.tabela).update({ pdf_path:nome }).eq("id", item.id);
           if(eU) throw eU;
           setLista(l=>l.map(x=>x.id===item.id?{...x,pdf_path:nome}:x));
-          setMsg("PDF anexado à DTS de OS "+(item.numero_os||"-")+".");
+          setMsg("PDF anexado ao registro de OS "+(item.numero_os||"-")+".");
         }catch(e){ setMsg("Erro ao anexar: "+e.message); }
         finally{ setCarregando(false); }
       }
@@ -1068,7 +1076,7 @@
 
       return (<div style={{maxWidth:760,margin:"0 auto",padding:16,background:"#fff",minHeight:"100vh"}}>
         <div className="header" style={{borderRadius:10}}>
-          <h1>Painel administrativo — DTS</h1>
+          <h1>Painel administrativo — {cfg.rotulo}</h1>
           <p>Grupo Solution · relatórios por período</p>
         </div>
         <div style={{padding:"16px 0"}}>
@@ -1088,8 +1096,8 @@
             {lista.map(item=>(
               <div key={item.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"1px solid #eee",borderRadius:8,marginBottom:8}}>
                 <div style={{flex:1}}>
-                  <div style={{fontSize:14,fontWeight:500}}>{item.atividade||"(sem atividade)"} — OS {item.numero_os||"-"}</div>
-                  <div style={{fontSize:12,color:"#888"}}>{item.data_atividade||item.created_at?.slice(0,10)} · {item.localizacao||"-"} · {item.lider_frente||"-"}</div>
+                  <div style={{fontSize:14,fontWeight:500}}>{item[cfg.colTitulo]||"(sem descrição)"} — OS {item.numero_os||"-"}</div>
+                  <div style={{fontSize:12,color:"#888"}}>{item.data_atividade||item.created_at?.slice(0,10)} · {item[cfg.colLocal]||"-"} · {item[cfg.colLider]||"-"}</div>
                 </div>
                 {item.pdf_path
                   ? <React.Fragment>
@@ -1101,7 +1109,7 @@
                       <input type="file" accept="application/pdf" style={{display:"none"}} onChange={e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=""; anexarPdf(item,f); }} />
                     </label>
                 }
-                <button style={{fontSize:13,padding:"7px 10px",borderRadius:8,border:"1px solid #A32D2D",background:"#fff",color:"#A32D2D",cursor:"pointer"}} onClick={()=>excluirUma(item)} title="Excluir esta DTS">Excluir</button>
+                <button style={{fontSize:13,padding:"7px 10px",borderRadius:8,border:"1px solid #A32D2D",background:"#fff",color:"#A32D2D",cursor:"pointer"}} onClick={()=>excluirUma(item)} title="Excluir este registro">Excluir</button>
               </div>
             ))}
           </div>
@@ -1440,14 +1448,44 @@
       </div>);
     }
 
-    // Tela inicial: escolher documento (DTS / PT / Checklist), depois perfil
+    // Sub-tela de um documento: escolher Preencher ou Administrador
+    function DocHub({ titulo, sub, corAdm, onVoltar, onPreencher, onAdmin, labelPreencher }){
+      return (<div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+        <div className="header">
+          <a onClick={onVoltar} style={{color:"#B5D4F4",cursor:"pointer",fontSize:13,display:"inline-block",marginBottom:6}}>← Início</a>
+          <h1>{titulo}</h1>
+          <p>{sub}</p>
+        </div>
+        <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",gap:14,padding:24,maxWidth:420,margin:"0 auto",width:"100%"}}>
+          <button className="btn btn-blue" style={{padding:"18px",fontSize:16}} onClick={onPreencher}>
+            {labelPreencher||"Preencher"}<br/><span style={{fontSize:12,fontWeight:400,opacity:.85}}>Colaborador</span>
+          </button>
+          <button className="btn btn-light" style={{padding:"18px",fontSize:16}} onClick={onAdmin}>
+            Administrador<br/><span style={{fontSize:12,fontWeight:400,opacity:.7}}>Relatórios por período</span>
+          </button>
+        </div>
+      </div>);
+    }
+
+    // Tela inicial: escolher documento (DTS / PT / Checklist)
     function Root(){
-      const [modo,setModo]=useState("inicio"); // inicio | dts | dts_adm | pt_menu | pt_quente | checklist
+      // inicio | dts_hub | dts | dts_adm | pt_hub | pt_menu | pt_quente | pt_adm
+      const [modo,setModo]=useState("inicio");
       const [qrApp,setQrApp]=useState(false);
-      if(modo==="dts") return <App onVoltar={()=>setModo("inicio")} />;
-      if(modo==="dts_adm") return <PainelAdm onVoltar={()=>setModo("inicio")} />;
-      if(modo==="pt_menu") return <MenuPT onVoltar={()=>setModo("inicio")} onEscolher={(id)=>setModo("pt_"+id)} />;
+
+      // DTS
+      if(modo==="dts_hub") return <DocHub titulo="DTS" sub="Discussão de Trabalho Seguro" onVoltar={()=>setModo("inicio")}
+        labelPreencher="Preencher DTS" onPreencher={()=>setModo("dts")} onAdmin={()=>setModo("dts_adm")} />;
+      if(modo==="dts") return <App onVoltar={()=>setModo("dts_hub")} />;
+      if(modo==="dts_adm") return <PainelAdm onVoltar={()=>setModo("dts_hub")} cfg={CFG_DTS} />;
+
+      // PT
+      if(modo==="pt_hub") return <DocHub titulo="PT" sub="Permissão de Trabalho" onVoltar={()=>setModo("inicio")}
+        labelPreencher="Preencher PT" onPreencher={()=>setModo("pt_menu")} onAdmin={()=>setModo("pt_adm")} />;
+      if(modo==="pt_menu") return <MenuPT onVoltar={()=>setModo("pt_hub")} onEscolher={(id)=>setModo("pt_"+id)} />;
       if(modo==="pt_quente") return <AppPTQuente onVoltar={()=>setModo("pt_menu")} />;
+      if(modo==="pt_adm") return <PainelAdm onVoltar={()=>setModo("pt_hub")} cfg={CFG_PT_QUENTE} />;
+
       const Card=({cor,titulo,sub,onClick,disabled})=>(
         <button disabled={disabled} onClick={onClick} style={{padding:"20px",fontSize:16,borderRadius:12,border:"none",
           background:disabled?"#eee":cor,color:disabled?"#aaa":"#fff",cursor:disabled?"default":"pointer",fontWeight:600,textAlign:"center"}}>
@@ -1462,11 +1500,10 @@
           </div>
           <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",gap:14,padding:24,maxWidth:420,margin:"0 auto",width:"100%"}}>
             <p style={{textAlign:"center",color:"#666",fontSize:15,margin:"0 0 4px"}}>Qual documento?</p>
-            <Card cor="#185FA5" titulo="DTS" sub="Discussão de Trabalho Seguro" onClick={()=>setModo("dts")} />
-            <Card cor="#0C447C" titulo="PT" sub="Permissão de Trabalho" onClick={()=>setModo("pt_menu")} />
+            <Card cor="#185FA5" titulo="DTS" sub="Discussão de Trabalho Seguro" onClick={()=>setModo("dts_hub")} />
+            <Card cor="#0C447C" titulo="PT" sub="Permissão de Trabalho" onClick={()=>setModo("pt_hub")} />
             <Card cor="#6b7a8f" titulo="Checklist" sub="Em breve" disabled={true} />
-            <div style={{borderTop:"1px solid #eee",marginTop:8,paddingTop:14,display:"flex",flexDirection:"column",gap:10}}>
-              <button className="btn btn-light" onClick={()=>setModo("dts_adm")}>Administrador (relatórios DTS)</button>
+            <div style={{borderTop:"1px solid #eee",marginTop:8,paddingTop:14,display:"flex",justifyContent:"center"}}>
               <button onClick={()=>setQrApp(true)} style={{background:"none",border:"none",color:"#185FA5",fontSize:13,fontWeight:500,cursor:"pointer"}}>
                 ▣ Compartilhar acesso (QR code)
               </button>
