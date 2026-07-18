@@ -918,12 +918,19 @@
     const CFG_PT_QUENTE={ tabela:"pt_quente", colab:"pt_quente_colaborador", fk:"pt_id", rotulo:"PT a Quente", prefixo:"PT_quente",
       colTitulo:"descricao_trabalho", colLocal:"local_trabalho", colLider:"lider_atividade",
       select:"id,created_at,numero_os,descricao_trabalho,local_trabalho,lider_atividade,pdf_path,data_atividade" };
+    // Tabela única de PT: admin filtra por tipo + data. filtroTipo habilita o seletor de tipo.
+    const PT_TIPOS=[["","Todas"],["quente","A Quente"],["eletricidade","Eletricidade"],["altura","Altura"],["escavacao","Escavação"],["confinado","Espaço Confinado"],["mergulho","Mergulho"],["icamento","Içamento"]];
+    const CFG_PT={ tabela:"pt", colab:"pt_colaborador", fk:"pt_id", rotulo:"PT", prefixo:"PT",
+      colTitulo:"descricao_trabalho", colLocal:"local_trabalho", colLider:"lider_atividade",
+      filtroTipo:true, tipos:PT_TIPOS,
+      select:"id,created_at,tipo,numero_os,descricao_trabalho,local_trabalho,lider_atividade,pdf_path,data_atividade" };
 
     function PainelAdm({ onVoltar, cfg=CFG_DTS }) {
       const [ok,setOk]=useState(false);
       const [senha,setSenha]=useState("");
       const [de,setDe]=useState("");
       const [ate,setAte]=useState("");
+      const [tipoFiltro,setTipoFiltro]=useState("");
       const [lista,setLista]=useState([]);
       const [carregando,setCarregando]=useState(false);
       const [msg,setMsg]=useState("");
@@ -934,6 +941,7 @@
           let q=supa.from(cfg.tabela).select(cfg.select).order("created_at",{ascending:false});
           if(de) q=q.gte("data_atividade",de);
           if(ate) q=q.lte("data_atividade",ate);
+          if(cfg.filtroTipo && tipoFiltro) q=q.eq("tipo",tipoFiltro);
           const { data, error }=await q;
           if(error) throw error;
           setLista(data||[]);
@@ -1083,6 +1091,13 @@
           <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
             <div><label>De (data)</label><input type="date" value={de} onChange={e=>setDe(e.target.value)} /></div>
             <div><label>Até (data)</label><input type="date" value={ate} onChange={e=>setAte(e.target.value)} /></div>
+            {cfg.filtroTipo && (
+              <div><label>Tipo de PT</label>
+                <select value={tipoFiltro} onChange={e=>setTipoFiltro(e.target.value)} style={{padding:9,fontSize:14,border:"1px solid #ccc",borderRadius:8,background:"#fff"}}>
+                  {cfg.tipos.map(([v,l])=><option key={v} value={v}>{l}</option>)}
+                </select>
+              </div>
+            )}
             <button className="btn btn-blue" onClick={buscar} disabled={carregando}>{carregando?"Buscando...":"Buscar"}</button>
             {lista.length>0 && <button className="btn btn-light" onClick={baixarTodos}>Baixar todos (PDF único)</button>}
             <button onClick={excluirPeriodo} disabled={carregando}
@@ -1418,10 +1433,355 @@
     }
 
     // Submenu de PT: escolher qual das 7 (só A Quente ativa por ora)
+    // ============================================================
+    // MOTOR GENÉRICO DE PT — serve todas as PTs via descritor
+    // ============================================================
+    // Descritor de cada PT: { tipo, titulo, cod, arquivo, itens[], coord{}, especial? }
+
+    const PT_ELETRICIDADE_ITENS = [
+      "Foi realizada a reunião pré trabalho discutindo com todos os colaboradores, os riscos das atividades?",
+      "Foram preenchidas todas as documentações necessárias como DTS, checklists de máquinas/equipamentos, veículos, acessórios, entre outros?",
+      "Foi preenchido o mapa de bloqueios pelo responsável de bloqueio?",
+      "Todos os colaboradores estão utilizando uniforme conforme a classe de risco 1, 2, 3 ou 4 para atividade?",
+      "Todos os colaboradores estão utilizando os EPIs, como capacete com jugular, calçado de segurança com biqueira e solado isolante, luva isolante e óculos de segurança, entre outros aplicáveis para atividade?",
+      "Os EPIs e uniforme estão em bom estado de uso, sem a presença de danos materiais?",
+      "A rede de energia está desenergizada?",
+      "A rede de energia está bloqueada e etiquetada contra o religamento intencional ou acidental?",
+      "Foi verificado o teste de consistência dos bloqueios?",
+      "Foi verificada a ausência de tensão da rede de energia?",
+      "O painel, máquina ou equipamento possui aterramento ou foi instalado um sistema de aterramento temporário?",
+      "A rede de energia está protegida com material isolante sem a presença de fiação exposta?",
+      "Foi realizada a sinalização e delimitação da atividade?",
+      "As ferramentas são de material isolante?",
+      "O local com cabine primária e secundária (alta tensão) possui tapete isolante, bastão isolante para rearme do sistema e luvas isolantes?",
+      "As condições climáticas estão favoráveis para realização da atividade com eletricidade (ausência de chuva, tempestades, raios, garoa e ventos fortes)?",
+      "Todos os trabalhadores envolvidos na atividade com eletricidade estão sem adornos metálicos, que possam ser condutores de eletricidade?",
+      "A atividade possui um trabalhador autorizado para supervisionar a atividade?",
+      "Todas as pessoas que não fazem parte da atividade, estão na zona livre (fora da zona de controle e risco)?"
+    ];
+
+    const ELE_COORD = {"H":841.68,"paginas":2,"cab":{"empresa":[151.7,57.8],"setor":[217.0,47.3],"local":[81.1,68.3],"lider":[244.1,68.3],"os":[404.0,66.3],"descricao":[132.3,76.8]},"contratada":{"quad":[76.6,55.6],"rotulo":{"x0":81.0,"y0":52.5,"x1":151.7,"y1":57.8}},"tensao":{"BAIXA":[180.4,125.3],"MÉDIA":[281.7,125.3],"ALTA":[405.0,125.3]},"itens":[[173.3,276.5,296.5,317.6],[194.3,276.5,296.5,317.6],[215.2,276.5,296.5,317.6],[236.1,276.5,296.5,317.6],[257.1,276.5,296.5,317.6],[278.0,276.5,296.5,317.6],[298.9,276.5,296.5,317.6],[319.8,276.5,296.5,317.6],[340.8,276.5,296.5,317.6],[361.7,276.5,296.5,317.6],[382.6,276.5,296.5,317.6],[403.6,276.5,296.5,317.6],[424.5,276.5,296.5,317.6],[445.4,276.5,296.5,317.6],[466.4,276.5,296.5,317.6],[487.3,276.5,296.5,317.6],[508.2,276.5,296.5,317.6],[529.2,276.5,296.5,317.6],[550.1,276.5,296.5,317.6]],"segura":{"SIM":[279.5,572.7],"NÃO":[304.7,572.7]},"ciente":[233.0,619.7],"emissao":{"pag":1,"centros":[100.2,232.3,394.8],"vy":147.2},"trabalhadores":[[77.6,180.4],[77.6,197.9],[77.6,215.4],[77.6,232.9],[77.6,250.3],[281.0,180.4],[281.0,197.9],[281.0,215.4],[281.0,232.9],[283.7,250.3]],"emissor_verif":{"emissor":[122.9,283.4],"verif":[77.2,297.4]}};
+
+    const PT_DESCRITORES = {
+      eletricidade: {
+        tipo:"eletricidade", titulo:"Eletricidade", cod:"FO-COR-SEG-011",
+        arquivo:"modelo_pt_eletricidade.pdf", itens:PT_ELETRICIDADE_ITENS, coord:ELE_COORD,
+        especial:{ tipo:"tensao", label:"Voltagem da rede de energia", opcoes:["BAIXA","MÉDIA","ALTA"] }
+      }
+    };
+
+    function AppPT({ desc, onVoltar }) {
+      const C = desc.coord;
+      const agora = useRef(new Date());
+      const [numeroOs,setNumeroOs]=useState("");
+      const [tipoEquipe,setTipoEquipe]=useState("contratada");
+      const CONTRATADAS=["Grupo Solution"];
+      const [empresa,setEmpresa]=useState("Grupo Solution");
+      const [empresaOutra,setEmpresaOutra]=useState("");
+      const empresaEfetiva = tipoEquipe==="igua" ? "" : (empresa==="__outra__" ? empresaOutra : empresa);
+      const [setor,setSetor]=useState("");
+      const [local,setLocal]=useState("");
+      const [lider,setLider]=useState("");
+      const [descricao,setDescricao]=useState("");
+      const [turno,setTurno]=useState("Manhã");
+      const [aval,setAval]=useState(desc.itens.map(()=>({v:null,obs:""})));
+      const [segura,setSegura]=useState(null);
+      const [ciente,setCiente]=useState(false);
+      const [especial,setEspecial]=useState(null); // valor da seção especial (ex: "BAIXA")
+      const [emissorNome,setEmissorNome]=useState("");
+      const [emissorArea,setEmissorArea]=useState("");
+      const [verifNome,setVerifNome]=useState("");
+      const [verifArea,setVerifArea]=useState("");
+      const [nomeTmp,setNomeTmp]=useState("");
+      const [equipe,setEquipe]=useState([]);
+      const [rubricaIdx,setRubricaIdx]=useState(null);
+      const [toast,setToast]=useState(null);
+      const [salvando,setSalvando]=useState(false);
+
+      const mostraToast=(msg,err)=>{ setToast({msg,err}); setTimeout(()=>setToast(null),3000); };
+      const setItem=(i,campo,val)=>setAval(a=>a.map((x,j)=>j===i?{...x,[campo]:val}:x));
+      const addNome=()=>{ const v=nomeTmp.trim(); if(!v)return; if(equipe.length>=10){mostraToast("Máximo 10 trabalhadores.",true);return;} setEquipe([...equipe,{nome:v,rubrica:null}]); setNomeTmp(""); };
+      const setRubrica=(idx,d)=>setEquipe(eq=>eq.map((m,i)=>i===idx?{...m,rubrica:d}:m));
+
+      useEffect(()=>{ (async()=>{ await limparAntigas(); })(); },[]);
+
+      async function gerarPDF(osEfetiva){
+        const osMostrar=osEfetiva||numeroOs;
+        const { PDFDocument, rgb, StandardFonts } = PDFLib;
+        const H=C.H;
+        let tpl;
+        try{ const r=await fetch(desc.arquivo); if(!r.ok)throw new Error("HTTP "+r.status); tpl=await r.arrayBuffer(); }
+        catch(e){ mostraToast("Não achei "+desc.arquivo+" na pasta do app",true); return null; }
+        const doc=await PDFDocument.load(tpl);
+        const font=await doc.embedFont(StandardFonts.Helvetica);
+        const fontB=await doc.embedFont(StandardFonts.HelveticaBold);
+        const pgs=doc.getPages();
+        const put=(pi,x,top,s,size,bold)=>pgs[pi].drawText(String(s==null?"":s),{x,y:H-top,size:size||7,font:bold?fontB:font,color:rgb(0,0,0)});
+        const X=(pi,xTop,top,sz)=>pgs[pi].drawText("X",{x:xTop+3,y:H-top,size:sz||8,font:fontB,color:rgb(0,0,0)});
+        const center=(pi,cx,top,s,size)=>{ const w=font.widthOfTextAtSize(String(s),size||7); put(pi,cx-w/2,top,s,size); };
+
+        // CABEÇALHO (pág 0)
+        // contratada: microcorreção do rótulo + X no quadrado
+        const rot=C.contratada.rotulo, qd=C.contratada.quad;
+        // cobre o rótulo original e reimprime deslocado 3pt à direita da borda do quadrado
+        pgs[0].drawRectangle({x:rot.x0-0.3,y:H-rot.y1-0.8,width:(rot.x1-rot.x0)+1.3,height:(rot.y1-rot.y0)+1.6,color:rgb(1,1,1)});
+        put(0, qd[0]+ (81.7-76.6)/2 +0.5, rot.y1, "Contratada - Nome da empresa:", 6.6);
+        if(tipoEquipe==="igua"){
+          // marca o quadrado do Iguá (fica à esquerda do de contratada; aproximação: quad-40)
+          X(0, qd[0]-40, qd[1]+2.5, 7);
+        } else {
+          X(0, qd[0]-1.5, qd[1]+2.5, 7);   // X no quadrado da contratada, com viés à direita
+          put(0, C.cab.empresa[0]+16, C.cab.empresa[1], empresaEfetiva);
+        }
+        if(C.cab.setor) put(0, C.cab.setor[0]+5, C.cab.setor[1], setor);
+        if(C.cab.local) put(0, C.cab.local[0]+5, C.cab.local[1], local);
+        if(C.cab.lider) put(0, C.cab.lider[0]+5, C.cab.lider[1], lider);
+        if(C.cab.os)    put(0, C.cab.os[0]+5, C.cab.os[1], osMostrar);
+        if(C.cab.descricao) put(0, C.cab.descricao[0]+5, C.cab.descricao[1], descricao);
+
+        // SEÇÃO ESPECIAL (tensão)
+        if(desc.especial && desc.especial.tipo==="tensao" && especial && C.tensao[especial]){
+          const t=C.tensao[especial]; X(0, t[0], t[1], 8);
+        }
+
+        // AVALIAÇÃO
+        C.itens.forEach((it,i)=>{
+          const resp=aval[i] && aval[i].v;
+          if(!resp) return;
+          const col = resp==="SIM"?it[1] : resp==="NÃO"?it[2] : it[3];
+          if(col!=null){
+            const pag = (desc.itensPag && desc.itensPag[i]!=null) ? desc.itensPag[i] : 0;
+            X(pag, col, it[0], 8);
+          }
+          if(aval[i].obs){ /* observação vai na coluna OBSERVAÇÃO se mapeada — futuro */ }
+        });
+
+        // segura + ciente
+        if(segura && C.segura[segura]) X(0, C.segura[segura][0], C.segura[segura][1], 8);
+        if(ciente && C.ciente) X(0, C.ciente[0], C.ciente[1], 8);
+
+        // EMISSÃO
+        if(C.emissao){
+          const pe=C.emissao.pag, cs=C.emissao.centros, vy=C.emissao.vy;
+          center(pe, cs[0], vy, fmtData(agora.current));
+          center(pe, cs[1], vy, fmtHora(agora.current));
+          center(pe, cs[2], vy, turno);
+        }
+
+        // TRABALHADORES (rubrica na próxima etapa; nome agora)
+        const trabPag = C.trabalhadoresPag!=null ? C.trabalhadoresPag : (C.emissao?C.emissao.pag:0);
+        (C.trabalhadores||[]).forEach((pos,i)=>{
+          if(i<equipe.length){ put(trabPag, pos[0], pos[1], equipe[i].nome, 6.5); }
+        });
+
+        // EMISSOR / VERIFICADOR
+        if(C.emissor_verif){
+          const ep = C.emissorPag!=null ? C.emissorPag : (C.emissao?C.emissao.pag:0);
+          if(C.emissor_verif.emissor){ put(ep, C.emissor_verif.emissor[0], C.emissor_verif.emissor[1], emissorNome); }
+          if(C.emissor_verif.verif){ put(ep, C.emissor_verif.verif[0], C.emissor_verif.verif[1], verifNome); }
+        }
+
+        const bytes=await doc.save();
+        const blob=new Blob([bytes],{type:"application/pdf"}); const url=URL.createObjectURL(blob);
+        const a=document.createElement("a"); a.href=url; a.download="PT_"+desc.tipo+"_"+(numeroOs||"sem_os")+".pdf";
+        document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+        return bytes;
+      }
+
+      function montarRegistro(osEfetiva,osBase){
+        return {
+          tipo:desc.tipo, numero_os:osEfetiva, numero_os_base:osBase,
+          data_atividade:agora.current.toISOString().slice(0,10),
+          horario_emissao:fmtHora(agora.current), turno,
+          tipo_equipe:tipoEquipe, empresa:empresaEfetiva, setor,
+          local_trabalho:local, lider_atividade:lider, descricao_trabalho:descricao,
+          avaliacao: aval.map((x,i)=>({item:i+1, resposta:x.v, obs:x.obs})),
+          atividade_segura:segura, ciente,
+          especificos: desc.especial ? { [desc.especial.tipo]: especial } : {},
+          emissor_nome:emissorNome, emissor_area:emissorArea,
+          verificador_nome:verifNome, verificador_area:verifArea,
+          status:"finalizada"
+        };
+      }
+
+      async function enviarPT(registro, colaboradores, bytes, osNome){
+        const nome="pt/PT_"+desc.tipo+"_"+(osNome||"sem_os")+"_"+Date.now()+".pdf";
+        const { error:e3 }=await supa.storage.from("dts-pdfs").upload(nome, new Blob([bytes],{type:"application/pdf"}), {upsert:true,contentType:"application/pdf"});
+        if(e3) throw e3;
+        const { data:ins, error }=await supa.from("pt").insert({...registro, pdf_path:nome}).select().single();
+        if(error){ try{ await supa.storage.from("dts-pdfs").remove([nome]); }catch(_){} throw error; }
+        if(colaboradores && colaboradores.length){
+          const rows=colaboradores.map((nome,i)=>({pt_id:ins.id,nome,ordem:i}));
+          const { error:e2 }=await supa.from("pt_colaborador").insert(rows); if(e2) throw e2;
+        }
+        return { id:ins.id, pdf_path:nome };
+      }
+
+      async function salvarEGerar(){
+        if(!numeroOs.trim()){ mostraToast("Preencha o Nº da O.S (TOA).",true); return; }
+        if(tipoEquipe==="contratada" && !empresaEfetiva.trim()){ mostraToast("Informe a empresa contratada.",true); return; }
+        if(!local.trim()){ mostraToast("Preencha o Local do Trabalho.",true); return; }
+        if(desc.especial && !especial){ mostraToast("Selecione: "+desc.especial.label,true); return; }
+        const semResp=aval.map((x,i)=>x.v?null:i+1).filter(Boolean);
+        if(semResp.length){ mostraToast("Responda os itens: "+semResp.join(", "),true); return; }
+        if(!segura){ mostraToast("Marque se a atividade está segura.",true); return; }
+        if(!equipe.length){ mostraToast("Adicione ao menos um trabalhador.",true); return; }
+        const semRub=equipe.filter(m=>!m.rubrica).map(m=>m.nome);
+        if(semRub.length){ mostraToast("Falta rubrica de: "+semRub.join(", "),true); return; }
+
+        setSalvando(true);
+        try{
+          const hoje=agora.current.toISOString().slice(0,10);
+          const osBase=numeroOs.trim(); let osEfetiva=osBase; const online=navigator.onLine;
+          if(online){ try{ const {data:ex}=await supa.from("pt").select("id").eq("tipo",desc.tipo).eq("numero_os_base",osBase).eq("data_atividade",hoje);
+            const n=(ex||[]).length; if(n>0) osEfetiva=osBase+" Rev."+String(n).padStart(2,"0"); }catch(_){} }
+          const bytes=await gerarPDF(osEfetiva); if(!bytes){ setSalvando(false); return; }
+          const registro=montarRegistro(osEfetiva,osBase);
+          const colaboradores=equipe.map(m=>m.nome);
+          const osNome=(osEfetiva||"sem_os").replace(/[^\w.-]+/g,"_");
+          const localId="pt_"+desc.tipo+"_"+Date.now();
+          await salvarLocal({ id:localId, tipo:"pt_"+desc.tipo, nome:"PT_"+desc.tipo+"_"+osNome+".pdf",
+            data:fmtData(agora.current), dataISO:new Date().toISOString(), atividade:"PT "+desc.titulo, bytes });
+          if(online){
+            try{ await enviarPT(registro, colaboradores, bytes, osNome);
+              mostraToast(osEfetiva!==osBase?("PT enviada como "+osEfetiva+"."):"PT salva e enviada!");
+            }catch(e){ mostraToast("Sem conexão estável. Salva localmente.",true); }
+          } else { mostraToast("Offline: PT salva localmente.",true); }
+        }catch(e){ mostraToast("Erro: "+e.message,true); }
+        finally{ setSalvando(false); }
+      }
+
+      const NivBtns=({i})=>(<div style={{display:"flex",gap:6,marginTop:4}}>
+        {["SIM","NÃO","NA"].map(op=>(
+          <button key={op} onClick={()=>setItem(i,"v",op)}
+            style={{padding:"7px 12px",borderRadius:7,border:"1px solid "+(aval[i].v===op?"#185FA5":"#bbb"),
+            background:aval[i].v===op?"#185FA5":"#fff",color:aval[i].v===op?"#fff":"#333",fontSize:13,fontWeight:600,cursor:"pointer"}}>{op}</button>
+        ))}
+      </div>);
+
+      return (<div>
+        <div className="header">
+          <a onClick={onVoltar} style={{color:"#B5D4F4",cursor:"pointer",fontSize:13,display:"inline-block",marginBottom:6}}>← PTs</a>
+          <h1>PT — {desc.titulo}</h1>
+          <p>Grupo Solution · {desc.cod}</p>
+          <p className="meta-now">Emitida em {fmtData(agora.current)} às {fmtHora(agora.current)}</p>
+        </div>
+
+        <div className="section">
+          <h2>Dados gerais</h2>
+          <label>Tipo de equipe</label>
+          <div style={{display:"flex",gap:10,marginBottom:12}}>
+            <button className={"btn "+(tipoEquipe==="igua"?"btn-blue":"btn-light")} style={{flex:1}} onClick={()=>setTipoEquipe("igua")}>Iguá</button>
+            <button className={"btn "+(tipoEquipe==="contratada"?"btn-blue":"btn-light")} style={{flex:1}} onClick={()=>setTipoEquipe("contratada")}>Contratada</button>
+          </div>
+          {tipoEquipe==="contratada" && (<div style={{marginBottom:12}}>
+            <label>Empresa contratada</label>
+            <select value={empresa} onChange={e=>setEmpresa(e.target.value)} style={{width:"100%",padding:10,fontSize:15,border:"1px solid #ccc",borderRadius:8,background:"#fff"}}>
+              {CONTRATADAS.map(c=><option key={c} value={c}>{c}</option>)}
+              <option value="__outra__">Outra (digitar)</option>
+            </select>
+            {empresa==="__outra__" && <input type="text" value={empresaOutra} onChange={e=>setEmpresaOutra(e.target.value)} placeholder="Nome da empresa" style={{marginTop:8}} />}
+          </div>)}
+          <div className="field-row">
+            <div><label>Nº O.S (TOA)</label><input type="text" value={numeroOs} onChange={e=>setNumeroOs(e.target.value)} /></div>
+            <div><label>Setor</label><input type="text" value={setor} onChange={e=>setSetor(e.target.value)} /></div>
+          </div>
+          <label>Local do Trabalho</label>
+          <input type="text" value={local} onChange={e=>setLocal(e.target.value)} />
+          <label>Líder da atividade</label>
+          <input type="text" value={lider} onChange={e=>setLider(e.target.value)} />
+          <label>Descrição do trabalho</label>
+          <input type="text" value={descricao} onChange={e=>setDescricao(e.target.value)} />
+          <label>Turno</label>
+          <div style={{display:"flex",gap:8}}>
+            {["Manhã","Tarde","Noite"].map(t=>(
+              <button key={t} className={"btn "+(turno===t?"btn-blue":"btn-light")} style={{flex:1}} onClick={()=>setTurno(t)}>{t}</button>
+            ))}
+          </div>
+        </div>
+
+        {desc.especial && desc.especial.tipo==="tensao" && (
+          <div className="section">
+            <h2>{desc.especial.label}</h2>
+            <div style={{display:"flex",gap:8}}>
+              {desc.especial.opcoes.map(op=>(
+                <button key={op} onClick={()=>setEspecial(op)} style={{flex:1,padding:"10px",borderRadius:7,
+                  border:"1px solid "+(especial===op?"#185FA5":"#bbb"),background:especial===op?"#185FA5":"#fff",
+                  color:especial===op?"#fff":"#333",fontSize:14,fontWeight:600,cursor:"pointer"}}>{op}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="section">
+          <h2>Avaliação da PT</h2>
+          <p className="hint">Responda cada item.</p>
+          {desc.itens.map((txt,i)=>(
+            <div key={i} className="risco-card" style={{padding:"10px 12px"}}>
+              <div style={{fontSize:13,marginBottom:2}}><b>{i+1}.</b> {txt}</div>
+              <NivBtns i={i} />
+              <input type="text" value={aval[i].obs} onChange={e=>setItem(i,"obs",e.target.value)} placeholder="Observação (opcional)" style={{marginTop:8,marginBottom:0,fontSize:13,padding:8}} />
+            </div>
+          ))}
+          <div style={{marginTop:14,padding:"12px",background:"#f0f6fc",borderRadius:8}}>
+            <div style={{fontSize:14,fontWeight:600,marginBottom:8}}>A atividade está segura para ser realizada?</div>
+            <div style={{display:"flex",gap:8}}>
+              {["SIM","NÃO"].map(op=>(
+                <button key={op} onClick={()=>setSegura(op)} style={{flex:1,padding:"10px",borderRadius:7,
+                  border:"1px solid "+(segura===op?"#185FA5":"#bbb"),background:segura===op?"#185FA5":"#fff",
+                  color:segura===op?"#fff":"#333",fontSize:14,fontWeight:600,cursor:"pointer"}}>{op}</button>
+              ))}
+            </div>
+          </div>
+          <div className="team-item" style={{marginTop:12,background:"#fff",border:"1px solid #ddd"}}>
+            <div className="risco-chk" onClick={()=>setCiente(!ciente)} style={{background:ciente?"#185FA5":"#fff",borderColor:ciente?"#185FA5":"#999",color:"#fff"}}>{ciente?"✓":""}</div>
+            <span className="nome" style={{fontSize:13}} onClick={()=>setCiente(!ciente)}>Sim, estou ciente das informações declaradas</span>
+          </div>
+        </div>
+
+        <div className="section">
+          <h2>Emissor e verificador</h2>
+          <div className="field-row">
+            <div><label>Emissor da PT</label><input type="text" value={emissorNome} onChange={e=>setEmissorNome(e.target.value)} /></div>
+            <div><label>Área</label><input type="text" value={emissorArea} onChange={e=>setEmissorArea(e.target.value)} /></div>
+          </div>
+          <div className="field-row">
+            <div><label>Verificador / Dono de área</label><input type="text" value={verifNome} onChange={e=>setVerifNome(e.target.value)} /></div>
+            <div><label>Área</label><input type="text" value={verifArea} onChange={e=>setVerifArea(e.target.value)} /></div>
+          </div>
+          <p className="hint" style={{marginTop:4}}>O campo "Aprovador da PT (Iguá)" fica em branco no PDF para assinatura da Iguá.</p>
+        </div>
+
+        <div className="section">
+          <h2>Trabalhadores envolvidos</h2>
+          <p className="hint">Até 10. Cada um assina com rubrica.</p>
+          <div className="team-add">
+            <input type="text" value={nomeTmp} onChange={e=>setNomeTmp(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addNome()} placeholder="Nome do trabalhador" />
+            <button className="btn btn-light" onClick={addNome}>+ Add</button>
+          </div>
+          {equipe.map((m,i)=>(
+            <div key={i} className="team-item">
+              <span className="nome">{m.nome}</span>
+              {m.rubrica ? <img src={m.rubrica} className="rubrica-mini" alt="rubrica" onClick={()=>setRubricaIdx(i)} />
+                : <button className="btn btn-light" style={{fontSize:12,padding:"6px 10px"}} onClick={()=>setRubricaIdx(i)}>Rubricar</button>}
+              <button className="del" onClick={()=>setEquipe(equipe.filter((_,j)=>j!==i))}>×</button>
+            </div>
+          ))}
+        </div>
+
+        <div className="footer-actions">
+          <button className="btn btn-blue" disabled={salvando} onClick={salvarEGerar}>{salvando?"Salvando...":"Salvar e gerar PDF"}</button>
+        </div>
+
+        {rubricaIdx!==null && <RubricaModal onClose={()=>setRubricaIdx(null)} onSave={(d)=>{ setRubrica(rubricaIdx,d); setRubricaIdx(null); }} />}
+        {toast && <div className={"toast"+(toast.err?" err":"")}>{toast.msg}</div>}
+      </div>);
+    }
+
     function MenuPT({ onVoltar, onEscolher }){
       const PTS=[
         {id:"quente", nome:"Trabalho a Quente", cod:"FO-COR-SEG-033", ativo:true},
-        {id:"eletricidade", nome:"Eletricidade", cod:"FO-COR-SEG-011", ativo:false},
+        {id:"eletricidade", nome:"Eletricidade", cod:"FO-COR-SEG-011", ativo:true},
         {id:"altura", nome:"Trabalho em Altura", cod:"FO-COR-SEG-031", ativo:false},
         {id:"escavacao", nome:"Escavação", cod:"FO-COR-SEG-010", ativo:false},
         {id:"confinado", nome:"Espaço Confinado", cod:"FO-COR-SEG-030", ativo:false},
@@ -1484,7 +1844,8 @@
         labelPreencher="Preencher PT" onPreencher={()=>setModo("pt_menu")} onAdmin={()=>setModo("pt_adm")} />;
       if(modo==="pt_menu") return <MenuPT onVoltar={()=>setModo("pt_hub")} onEscolher={(id)=>setModo("pt_"+id)} />;
       if(modo==="pt_quente") return <AppPTQuente onVoltar={()=>setModo("pt_menu")} />;
-      if(modo==="pt_adm") return <PainelAdm onVoltar={()=>setModo("pt_hub")} cfg={CFG_PT_QUENTE} />;
+      if(modo==="pt_eletricidade") return <AppPT desc={PT_DESCRITORES.eletricidade} onVoltar={()=>setModo("pt_menu")} />;
+      if(modo==="pt_adm") return <PainelAdm onVoltar={()=>setModo("pt_hub")} cfg={CFG_PT} />;
 
       const Card=({cor,titulo,sub,onClick,disabled})=>(
         <button disabled={disabled} onClick={onClick} style={{padding:"20px",fontSize:16,borderRadius:12,border:"none",
