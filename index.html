@@ -1201,21 +1201,31 @@
         // emissão
         center(141.9,525.5,fmtData(agora.current)); center(308.0,525.5,fmtHora(agora.current)); center(465.5,525.5,turno);
 
-        // trabalhadores (rubrica na coluna ASSINATURA)
-        const esqY=[551.8,568.9,585.9,602.9,620.0];
+        // trabalhadores: nome ao lado do rótulo, rubrica centralizada na célula ASSINATURA
+        // linhas da grade (topo): 545,562,579,596,613 ; altura ~17pt
+        const rowTopY=[545.0,562.0,579.1,596.1,613.1];
+        const ROW_H=17.0;
+        // baseline do nome ~ meio da linha + um pouco: topo+12
+        // células de assinatura: ESQ x 249.2-323.5 (centro 286.4) ; DIR x 496.8-564.1 (centro 530.5)
+        const sigCenter=[286.4,530.5];
+        const nomeX=[78,367];
         for(let i=0;i<Math.min(equipe.length,10);i++){
           const m=equipe[i];
           const col=i<5?0:1;
-          const y=esqY[i%5];
-          put(col===0?78:367, y, m.nome, 6.5);
+          const topo=rowTopY[i%5];
+          put(nomeX[col], topo+11.5, m.nome, 6.5);        // nome alinhado na baseline da linha
           if(m.rubrica){ try{ const png=await doc.embedPng(m.rubrica);
-            const rw=60,rh=12; const ax=col===0?245:530;
-            pg.drawImage(png,{x:ax,y:H-y-2,width:rw,height:rh}); }catch(_){}
+            // conter dentro da célula: max 66pt largura, max 13pt altura, mantendo proporção
+            const maxW=66, maxH=13; const ar=png.width/png.height;
+            let rw=maxW, rh=rw/ar; if(rh>maxH){ rh=maxH; rw=rh*ar; }
+            const cx=sigCenter[col], cyTop=topo+(ROW_H-rh)/2;   // centraliza H e V
+            pg.drawImage(png,{x:cx-rw/2, y:H-cyTop-rh, width:rw, height:rh}); }catch(_){}
           }
         }
-        // emissor / verificador
-        put(125,654,emissorNome); put(255,654,emissorArea);
-        put(180,671,verifNome); put(255,671,verifArea);
+        // emissor / verificador — nome e área centralizados nas colunas
+        // NOME col: x 34.6-? ; ÁREA col centro ~ (usa put simples alinhado)
+        put(120,653.5,emissorNome); put(250,653.5,emissorArea);
+        put(160,670.5,verifNome); put(250,670.5,verifArea);
 
         const bytes=await doc.save();
         const blob=new Blob([bytes],{type:"application/pdf"}); const url=URL.createObjectURL(blob);
