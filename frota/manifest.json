@@ -1,0 +1,15 @@
+{
+  "name": "Gestão de Frota — Grupo Solution",
+  "short_name": "Frota GS",
+  "description": "Registro e gestão da frota de máquinas do Grupo Solution",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0F172A",
+  "theme_color": "#1B3A5C",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
