@@ -1707,9 +1707,10 @@ altura: {
         const font=await doc.embedFont(StandardFonts.Helvetica);
         const fontB=await doc.embedFont(StandardFonts.HelveticaBold);
         const pgs=doc.getPages();
-        const put=(pi,x,top,s,size,bold)=>pgs[pi].drawText(String(s==null?"":s),{x,y:H-top,size:size||7,font:bold?fontB:font,color:rgb(0,0,0)});
-        const X=(pi,xTop,top,sz)=>pgs[pi].drawText("X",{x:xTop+3,y:H-top,size:sz||8,font:fontB,color:rgb(0,0,0)});
-        const center=(pi,cx,top,s,size)=>{ const w=font.widthOfTextAtSize(String(s),size||7); put(pi,cx-w/2,top,s,size); };
+        const okNum=(n)=>typeof n==="number" && !isNaN(n);
+        const put=(pi,x,top,s,size,bold)=>{ if(!okNum(x)||!okNum(top)||!pgs[pi]) return; pgs[pi].drawText(String(s==null?"":s),{x,y:H-top,size:size||7,font:bold?fontB:font,color:rgb(0,0,0)}); };
+        const X=(pi,xTop,top,sz)=>{ if(!okNum(xTop)||!okNum(top)||!pgs[pi]) return; pgs[pi].drawText("X",{x:xTop+3,y:H-top,size:sz||8,font:fontB,color:rgb(0,0,0)}); };
+        const center=(pi,cx,top,s,size)=>{ if(!okNum(cx)||!okNum(top)) return; const w=font.widthOfTextAtSize(String(s),size||7); put(pi,cx-w/2,top,s,size); };
 
         // CABEÇALHO (pág 0)
         // contratada: microcorreção do rótulo (lógica validada v5) + X no quadrado
@@ -1822,7 +1823,10 @@ altura: {
 
         // segura + ciente
         if(segura && C.segura[segura]) X(0, C.segura[segura][0], C.segura[segura][1], 8);
-        if(ciente && C.ciente) X(0, C.ciente[0], C.ciente[1], 8);
+        if(ciente && C.ciente){
+          const ci = Array.isArray(C.ciente) ? {pag:0, xy:C.ciente} : C.ciente;
+          if(ci.xy && ci.xy[0]!=null && ci.xy[1]!=null) X(ci.pag!=null?ci.pag:0, ci.xy[0], ci.xy[1], 8);
+        }
 
         // EMISSÃO
         if(C.emissao){
