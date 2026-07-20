@@ -4369,12 +4369,18 @@ function LoginValidador({ onEntrar, onVoltar }) {
 }
 
 // Validador: escolher a obra
-function ValidadorSelecionaObra({ maquinas, registros, onEscolher, onAbrirRelatorio, onVoltar }) {
+function ValidadorSelecionaObra({ maquinas, registros, checklistsFerr, onEscolher, onAbrirRelatorio, onVoltar }) {
   // conta registros pendentes de validação por obra
   const pendentesPorObra = {};
   for (const r of registros) {
     if (r.validacaoStatus !== 'pendente') continue;
     const nome = r.obra || 'Sem obra';
+    pendentesPorObra[nome] = (pendentesPorObra[nome] || 0) + 1;
+  }
+  // soma os checklists de ferramenta pendentes na mesma contagem por obra
+  for (const c of (checklistsFerr || [])) {
+    if ((c.validacaoStatus || 'pendente') !== 'pendente') continue;
+    const nome = c.obra || 'Sem obra';
     pendentesPorObra[nome] = (pendentesPorObra[nome] || 0) + 1;
   }
   // máquinas sem checklist hoje e com dias atrasados, por obra
@@ -4387,7 +4393,9 @@ function ValidadorSelecionaObra({ maquinas, registros, onEscolher, onAbrirRelato
     if (!comCheckHoje.has(m.id)) semCheckPorObra[nome] = (semCheckPorObra[nome] || 0) + 1;
     if (diasPendentesMaquina(m, registros).length > 0) atrasoPorObra[nome] = (atrasoPorObra[nome] || 0) + 1;
   }
-  const obras = Array.from(new Set(maquinas.filter(m=>m.ativa).map(m => m.obra || 'Sem obra'))).sort((a,b)=>a.localeCompare(b,'pt-BR'));
+  const obrasSet = new Set(maquinas.filter(m=>m.ativa).map(m => m.obra || 'Sem obra'));
+  for (const c of (checklistsFerr || [])) obrasSet.add(c.obra || 'Sem obra');
+  const obras = Array.from(obrasSet).sort((a,b)=>a.localeCompare(b,'pt-BR'));
 
   function Pilula({ n, texto, fg, bg }) {
     return (
@@ -4445,11 +4453,32 @@ function ValidadorSelecionaObra({ maquinas, registros, onEscolher, onAbrirRelato
 }
 
 // Validador: lista de registros pendentes da obra + validar/invalidar
-function ValidadorRegistros({ obra, registros, maquinas, onValidar, onVoltar }) {
+function ValidadorRegistros({ obra, registros, maquinas, checklistsFerr, onValidar, onValidarFerr, onPdfFerr, onVoltar }) {
   const [expandido, setExpandido] = useState(null);
   const [invalidando, setInvalidando] = useState(null); // id do registro em modo "informar motivo"
   const [motivo, setMotivo] = useState('');
   const [processando, setProcessando] = useState(null);
+  // Estado próprio da seção de ferramentas (independente das máquinas)
+  const [expandidoF, setExpandidoF] = useState(null);
+  const [invalidandoF, setInvalidandoF] = useState(null);
+  const [motivoF, setMotivoF] = useState('');
+  const [processandoF, setProcessandoF] = useState(null);
+
+  const ferrPendentes = (checklistsFerr || [])
+    .filter(c => (c.validacaoStatus || 'pendente') === 'pendente' && (c.obra || 'Sem obra') === obra)
+    .sort((a,b) => new Date(b.criadoEm) - new Date(a.criadoEm));
+
+  async function validarF(c) {
+    setProcessandoF(c.id);
+    await onValidarFerr(c, 'validada', '');
+    setProcessandoF(null);
+  }
+  async function confirmarInvalidarF(c) {
+    if (!motivoF.trim()) return;
+    setProcessandoF(c.id);
+    await onValidarFerr(c, 'invalidada', motivoF.trim());
+    setInvalidandoF(null); setMotivoF(''); setProcessandoF(null);
+  }
 
   const mapaMaq = {}; for (const m of maquinas) mapaMaq[m.id] = m;
 
@@ -4623,6 +4652,189 @@ function ValidadorRegistros({ obra, registros, maquinas, onValidar, onVoltar }) 
           ))}
         </div>
       )}
+
+      {/* SEÇÃO 4 — Checklists de ferramenta/equipamento pendentes */}
+      <div style={{display:'flex', alignItems:'center', gap:8, margin:'24px 2px 10px'}}>
+        <Clock size={16} color={COR.amarelo}/>
+        <span style={{fontSize:14.5, fontWeight:800, color:COR.texto}}>Checklists de ferramenta</span>
+        <span style={{fontSize:12.5, fontWeight:700, color:'#92400E', background:'#FDE68A', padding:'1px 9px', borderRadius:999}}>{ferrPendentes.length}</span>
+      </div>
+
+      {ferrPendentes.length === 0 ? (
+        <div style={{...S.card, textAlign:'center', padding:'22px 16px', color:COR.cinza}}>
+          <CheckCircle2 size={32} color={COR.verde}/>
+          <p style={{marginTop:8, fontWeight:600, fontSize:14}}>Nenhum checklist de ferramenta pendente.</p>
+        </div>
+      ) : (
+        <div style={{display:'flex', flexDirection:'column', gap:10}}>
+          {ferrPendentes.map(c => {
+            const aberto = expandidoF === c.id;
+            const lib = (c.liberado || '').toLowerCase().startsWith('s') || c.liberado === 'sim' || c.liberado === 'Sim';
+            const temNC = (c.respostas || []).some(r => (r.resp || r.resposta) === 'NC');
+            return (
+              <div key={c.id} style={{...S.card, padding:0, overflow:'hidden'}}>
+                <div onClick={() => setExpandidoF(aberto?null:c.id)} style={{display:'flex', alignItems:'center', gap:12, padding:'13px 16px', cursor:'pointer'}}>
+                  <div style={{width:40, height:40, borderRadius:10, background: temNC?COR.vermelhoBg:COR.verdeBg, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, fontSize:19}}>🔧</div>
+                  <div style={{flex:1, minWidth:0}}>
+                    <div style={{fontSize:15, fontWeight:700, color:COR.texto}}>{c.tipoNome || c.tipo} · Nº {c.numEquip || '—'}</div>
+                    <div style={{fontSize:12.5, color:COR.cinza, marginTop:1}}>{dataHoraBR(c.criadoEm)} · {c.respInspecao || 'sem nome'}</div>
+                  </div>
+                  {temNC && <Badge cor={COR.vermelho} bg={COR.vermelhoBg}>NC</Badge>}
+                  <ChevronDown size={18} color={COR.cinza} style={{transform: aberto?'rotate(180deg)':'none', transition:'transform .15s', flexShrink:0}}/>
+                </div>
+
+                {aberto && (
+                  <div style={{borderTop:`1px solid ${COR.borda}`, padding:'14px 16px', background:'#FAFBFC'}}>
+                    <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(130px,1fr))', gap:8, marginBottom:12, fontSize:13}}>
+                      <div><b>Setor:</b> {c.setor || '—'}</div>
+                      <div><b>Local:</b> {c.local || '—'}</div>
+                      <div><b>Resp. Inspeção:</b> {c.respInspecao || '—'}</div>
+                      <div><b>Liberado:</b> {c.liberado || '—'}</div>
+                    </div>
+                    {c.observacoes && <div style={{fontSize:13.5, marginBottom:10}}><b>Obs:</b> {c.observacoes}</div>}
+
+                    <button onClick={() => onPdfFerr(c)} style={{...S.botaoSec, marginBottom:10}}><FileText size={16}/> Baixar PDF</button>
+
+                    {invalidandoF === c.id ? (
+                      <div style={{marginTop:6}}>
+                        <label style={S.rotulo}>Motivo da invalidação</label>
+                        <textarea value={motivoF} rows={2} placeholder="Descreva o que está errado…" style={{...S.campo, resize:'vertical'}} onChange={e => setMotivoF(e.target.value)} autoFocus/>
+                        <div style={{display:'flex', gap:8, marginTop:8}}>
+                          <button onClick={() => confirmarInvalidarF(c)} disabled={!motivoF.trim() || processandoF===c.id} style={{...S.botaoPrim, flex:1, background:COR.vermelho, opacity:(!motivoF.trim()||processandoF===c.id)?.6:1}}>Confirmar invalidação</button>
+                          <button onClick={() => { setInvalidandoF(null); setMotivoF(''); }} style={S.botaoSec}>Cancelar</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{display:'flex', gap:10, marginTop:6}}>
+                        <button onClick={() => validarF(c)} disabled={processandoF===c.id} style={{...S.botaoPrim, flex:1, background:COR.verde, opacity:processandoF===c.id?.7:1}}><CheckCircle2 size={17}/> Validar</button>
+                        <button onClick={() => { setInvalidandoF(c.id); setMotivoF(''); }} style={{...S.botaoSec, color:COR.vermelho, borderColor:'#FECACA'}}><X size={17}/> Invalidar</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Admin: listagem de TODOS os checklists de ferramenta, com filtro por data e obra
+function TelaChecklistsFerramenta({ checklistsFerr, onPdf, onVoltar }) {
+  const [fData, setFData] = useState('');   // 'YYYY-MM-DD' ou ''
+  const [fObra, setFObra] = useState('');   // nome da obra ou ''
+  const [fStatus, setFStatus] = useState(''); // '', 'pendente', 'validada', 'invalidada'
+  const [expandido, setExpandido] = useState(null);
+  const [baixando, setBaixando] = useState(null);
+
+  const obras = Array.from(new Set((checklistsFerr || []).map(c => c.obra || 'Sem obra'))).sort((a,b)=>a.localeCompare(b,'pt-BR'));
+
+  const lista = (checklistsFerr || [])
+    .filter(c => !fObra || (c.obra || 'Sem obra') === fObra)
+    .filter(c => !fStatus || (c.validacaoStatus || 'pendente') === fStatus)
+    .filter(c => {
+      if (!fData) return true;
+      const d = c.dataRef || (c.criadoEm ? diaLocal(c.criadoEm) : '');
+      return d === fData;
+    })
+    .sort((a,b) => new Date(b.criadoEm) - new Date(a.criadoEm));
+
+  async function baixar(c) {
+    setBaixando(c.id);
+    try { await onPdf(c); } catch (e) { console.warn(e); }
+    setBaixando(null);
+  }
+
+  function selStatus(c) {
+    const s = c.validacaoStatus || 'pendente';
+    if (s === 'validada') return <Badge cor={COR.verde} bg={COR.verdeBg}>Validado</Badge>;
+    if (s === 'invalidada') return <Badge cor={COR.vermelho} bg={COR.vermelhoBg}>Invalidado</Badge>;
+    return <Badge cor="#92400E" bg="#FDE68A">Pendente</Badge>;
+  }
+
+  return (
+    <div style={{maxWidth:720, margin:'0 auto'}}>
+      <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:18}}>
+        <button onClick={onVoltar} style={{...S.botaoSec, padding:10, borderRadius:10}} aria-label="Voltar"><ArrowLeft size={20}/></button>
+        <div>
+          <h2 style={{margin:0, fontSize:22, fontWeight:800, color:COR.azul}}>Checklists de ferramenta</h2>
+          <p style={{margin:'2px 0 0', color:COR.cinza, fontSize:13.5}}>{lista.length} de {(checklistsFerr||[]).length} registro(s)</p>
+        </div>
+      </div>
+
+      {/* Filtros */}
+      <div style={{...S.card, display:'flex', flexWrap:'wrap', gap:12, alignItems:'flex-end', marginBottom:16}}>
+        <div style={{flex:'1 1 150px'}}>
+          <label style={S.rotulo}>Data</label>
+          <input type="date" value={fData} onChange={e => setFData(e.target.value)} style={S.campo}/>
+        </div>
+        <div style={{flex:'1 1 170px'}}>
+          <label style={S.rotulo}>Obra</label>
+          <select value={fObra} onChange={e => setFObra(e.target.value)} style={S.campo}>
+            <option value="">Todas</option>
+            {obras.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+        </div>
+        <div style={{flex:'1 1 150px'}}>
+          <label style={S.rotulo}>Status</label>
+          <select value={fStatus} onChange={e => setFStatus(e.target.value)} style={S.campo}>
+            <option value="">Todos</option>
+            <option value="pendente">Pendente</option>
+            <option value="validada">Validado</option>
+            <option value="invalidada">Invalidado</option>
+          </select>
+        </div>
+        {(fData || fObra || fStatus) && (
+          <button onClick={() => { setFData(''); setFObra(''); setFStatus(''); }} style={{...S.botaoSec, flex:'0 0 auto'}}>Limpar</button>
+        )}
+      </div>
+
+      {lista.length === 0 ? (
+        <div style={{...S.card, textAlign:'center', padding:'30px 16px', color:COR.cinza}}>
+          <Wrench size={32} color={COR.cinza}/>
+          <p style={{marginTop:8, fontWeight:600, fontSize:14}}>Nenhum checklist com esses filtros.</p>
+        </div>
+      ) : (
+        <div style={{display:'flex', flexDirection:'column', gap:10}}>
+          {lista.map(c => {
+            const aberto = expandido === c.id;
+            const temNC = (c.respostas || []).some(r => (r.resp || r.resposta) === 'NC');
+            return (
+              <div key={c.id} style={{...S.card, padding:0, overflow:'hidden'}}>
+                <div onClick={() => setExpandido(aberto?null:c.id)} style={{display:'flex', alignItems:'center', gap:12, padding:'13px 16px', cursor:'pointer'}}>
+                  <div style={{width:40, height:40, borderRadius:10, background: temNC?COR.vermelhoBg:COR.verdeBg, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, fontSize:19}}>🔧</div>
+                  <div style={{flex:1, minWidth:0}}>
+                    <div style={{fontSize:15, fontWeight:700, color:COR.texto}}>{c.tipoNome || c.tipo} · Nº {c.numEquip || '—'}</div>
+                    <div style={{fontSize:12.5, color:COR.cinza, marginTop:1}}>{dataHoraBR(c.criadoEm)} · {c.obra || 'Sem obra'} · {c.respInspecao || 'sem nome'}</div>
+                  </div>
+                  {selStatus(c)}
+                  <ChevronDown size={18} color={COR.cinza} style={{transform: aberto?'rotate(180deg)':'none', transition:'transform .15s', flexShrink:0}}/>
+                </div>
+
+                {aberto && (
+                  <div style={{borderTop:`1px solid ${COR.borda}`, padding:'14px 16px', background:'#FAFBFC'}}>
+                    <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px,1fr))', gap:8, marginBottom:12, fontSize:13}}>
+                      <div><b>Setor:</b> {c.setor || '—'}</div>
+                      <div><b>Local:</b> {c.local || '—'}</div>
+                      <div><b>Origem:</b> {c.isIgua ? 'Iguá' : (c.contratada || 'Terceiro')}</div>
+                      <div><b>Resp. Inspeção:</b> {c.respInspecao || '—'}</div>
+                      <div><b>Liberado:</b> {c.liberado || '—'}</div>
+                      {(c.validacaoStatus === 'invalidada' && c.validacaoMotivo) && <div style={{color:COR.vermelho}}><b>Motivo:</b> {c.validacaoMotivo}</div>}
+                      {c.validacaoPor && <div><b>Validação:</b> {c.validacaoPor}</div>}
+                    </div>
+                    {c.observacoes && <div style={{fontSize:13.5, marginBottom:10}}><b>Obs:</b> {c.observacoes}</div>}
+                    <button onClick={() => baixar(c)} disabled={baixando===c.id} style={{...S.botaoSec, opacity: baixando===c.id?.6:1}}>
+                      <FileText size={16}/> {baixando===c.id ? 'Gerando…' : 'Baixar PDF'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -4674,6 +4886,54 @@ async function enviarChecklistFerramenta(reg) {
     .from('checklists_ferramenta').insert(linha).select('id').single();
   if (error) throw error;
   return { id: data.id };
+}
+
+// Converte uma linha do banco (snake_case) para o formato que o app/PDF usam (camelCase)
+function checklistFerrDoBanco(l) {
+  return {
+    id: l.id,
+    tipo: l.tipo, tipoNome: l.tipo_nome, cod: l.cod,
+    obra: l.obra || 'Iguá Saneamento', setor: l.setor || '',
+    numEquip: l.num_equip || '', local: l.local_uso || '',
+    contratada: l.contratada || '', isIgua: l.is_igua === true,
+    respSetor: l.resp_setor || '', respInspecao: l.resp_inspecao || '',
+    veicMarca: l.veic_marca || '', veicModelo: l.veic_modelo || '',
+    veicPlaca: l.veic_placa || '', veicTag: l.veic_tag || '',
+    respostas: l.respostas || [], outrosItens: l.outros_itens || [],
+    observacoes: l.observacoes || '', liberado: l.liberado || '',
+    nomeInspecao: l.nome_inspecao || '', nomeEquip: l.nome_equip || '',
+    nomeLider: l.nome_lider || '', dataRef: l.data_ref || null,
+    // O PDF lê reg.fotos; no banco a coluna é fotos_url
+    fotos: l.fotos_url || [], fotosUrls: l.fotos_url || [],
+    validacaoStatus: l.validacao_status || 'pendente',
+    validacaoPor: l.validacao_por || null,
+    validacaoEm: l.validacao_em || null,
+    validacaoMotivo: l.validacao_motivo || null,
+    criadoEm: l.criado_em,
+  };
+}
+
+// Lista todos os checklists de ferramenta salvos no Supabase
+async function listarChecklistsFerramenta() {
+  if (!supabaseClient || !navigator.onLine) return [];
+  try {
+    const { data, error } = await comTimeout(
+      supabaseClient.from('checklists_ferramenta').select('*').order('criado_em', { ascending: false }), 8000);
+    if (error) throw error;
+    return (data || []).map(checklistFerrDoBanco);
+  } catch (e) { console.warn('listarChecklistsFerramenta offline/falha', e); return []; }
+}
+
+// Validação de um checklist de ferramenta (validador)
+async function validarChecklistFerramenta(reg, status, motivo, nomeResp) {
+  if (!supabaseClient) throw new Error('sem conexão');
+  const { error } = await supabaseClient.from('checklists_ferramenta').update({
+    validacao_status: status,
+    validacao_por: nomeResp,
+    validacao_em: new Date().toISOString(),
+    validacao_motivo: status === 'invalidada' ? motivo : null,
+  }).eq('id', reg.id);
+  if (error) throw error;
 }
 
 // PDF no formato oficial da planilha (jsPDF, desenhado do zero)
@@ -4834,6 +5094,37 @@ function baixarPdfFerramenta(reg) {
   const doc = gerarPdfFerramenta(reg);
   const nome = `checklist_${reg.tipo}_${(reg.numEquip || 'equip').replace(/[^\w-]+/g, '_')}.pdf`;
   doc.save(nome);
+}
+
+// Converte uma URL de imagem (Supabase Storage) em dataURL, para o jsPDF conseguir embutir.
+function urlParaDataUrl(url) {
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try {
+          const c = document.createElement('canvas');
+          c.width = img.naturalWidth; c.height = img.naturalHeight;
+          c.getContext('2d').drawImage(img, 0, 0);
+          resolve(c.toDataURL('image/jpeg', 0.85));
+        } catch (e) { resolve(null); }
+      };
+      img.onerror = () => resolve(null);
+      img.src = url;
+    } catch (e) { resolve(null); }
+  });
+}
+
+// Gera o PDF de um checklist SALVO (linha do banco), buscando as fotos por URL antes.
+async function baixarPdfFerramentaSalvo(reg) {
+  let regPdf = reg;
+  const urls = (reg.fotos || []).filter(Boolean);
+  if (urls.length) {
+    const dataUrls = (await Promise.all(urls.map(u => (typeof u === 'string' && u.startsWith('http')) ? urlParaDataUrl(u) : Promise.resolve(u)))).filter(Boolean);
+    regPdf = { ...reg, fotos: dataUrls };
+  }
+  baixarPdfFerramenta(regPdf);
 }
 
 
@@ -5107,6 +5398,7 @@ function App() {
   const [movimentacoes, setMovimentacoes] = useState([]);
   const [obras, setObras] = useState([]);
   const [registros, setRegistros] = useState([]);
+  const [checklistsFerr, setChecklistsFerr] = useState([]); // checklists de ferramenta/equipamento salvos
   const [checklistItens, setChecklistItens] = useState(CHECKLIST_PADRAO);
   const [carregando, setCarregando] = useState(true);
   const [tela, setTela] = useState('lista');      // admin: 'lista' | 'form'
@@ -5169,7 +5461,7 @@ function App() {
   }, []);
 
   async function recarregar() {
-    const [ms, os, rs, ci, rv] = await Promise.all([listarMaquinas(), listarObras(), listarRegistros(), lerChecklistConfig(), listarRevisoes()]);
+    const [ms, os, rs, ci, rv, cf] = await Promise.all([listarMaquinas(), listarObras(), listarRegistros(), lerChecklistConfig(), listarRevisoes(), listarChecklistsFerramenta()]);
     // Atualiza nome/código/obra de cada registro com o cadastro atual da máquina
     // (assim, renomear uma máquina reflete em todos os relatórios, inclusive antigos).
     const mapaM = {};
@@ -5179,7 +5471,7 @@ function App() {
       if (!m) return r; // máquina excluída: mantém o nome que estava salvo
       return { ...r, maquinaCodigo: m.codigo || '', maquinaDescricao: m.descricao || r.maquinaDescricao, obra: m.obra || r.obra };
     });
-    setMaquinas(ms); setObras(os); setRegistros(rsAtualizados); setChecklistItens(ci); setRevisoes(rv); setCarregando(false);
+    setMaquinas(ms); setObras(os); setRegistros(rsAtualizados); setChecklistItens(ci); setRevisoes(rv); setChecklistsFerr(cf); setCarregando(false);
   }
 
   // Carrega dados quando entra em operador ou admin
@@ -5414,6 +5706,21 @@ function App() {
     aviso(status === 'validada' ? 'Registro validado.' : 'Registro invalidado.');
     recarregar();
   }
+  // --- Validação de checklist de ferramenta/equipamento ---
+  async function validarChecklistFerr(reg, status, motivo) {
+    if (!supabaseClient) return;
+    const nomeResp = responsavel || 'Validador';
+    await validarChecklistFerramenta(reg, status, motivo, nomeResp);
+    await registrarMovimentacao({
+      responsavel: nomeResp, perfil: 'validador',
+      acao: status === 'validada' ? 'Validou checklist de ferramenta' : 'Invalidou checklist de ferramenta',
+      maquinaId: null, maquinaNome: `${reg.tipoNome || reg.tipo} · Nº ${reg.numEquip || '—'}`,
+      dataRef: reg.dataRef || (reg.criadoEm ? diaLocal(reg.criadoEm) : null),
+      valorNovo: status, detalhe: status === 'invalidada' ? motivo : '',
+    });
+    aviso(status === 'validada' ? 'Checklist validado.' : 'Checklist invalidado.');
+    recarregar();
+  }
   function sairValidador() {
     setLogadoValidador(false); setValObra(null); setModo('inicial'); setResponsavel('');
   }
@@ -5606,9 +5913,9 @@ function App() {
           ) : valObraRelatorio ? (
             <TelaRelatorios registros={registros} maquinas={maquinas} obraFixa={valObraRelatorio} onVoltar={() => setValObraRelatorio(null)} onSalvarAjuste={salvarAjusteRegistro} />
           ) : !valObra ? (
-            <ValidadorSelecionaObra maquinas={maquinas} registros={registros} onEscolher={setValObra} onAbrirRelatorio={setValObraRelatorio} onVoltar={sairValidador} />
+            <ValidadorSelecionaObra maquinas={maquinas} registros={registros} checklistsFerr={checklistsFerr} onEscolher={setValObra} onAbrirRelatorio={setValObraRelatorio} onVoltar={sairValidador} />
           ) : (
-            <ValidadorRegistros obra={valObra} registros={registros} maquinas={maquinas} onValidar={validarRegistro} onVoltar={() => setValObra(null)} />
+            <ValidadorRegistros obra={valObra} registros={registros} maquinas={maquinas} checklistsFerr={checklistsFerr} onValidar={validarRegistro} onValidarFerr={validarChecklistFerr} onPdfFerr={baixarPdfFerramentaSalvo} onVoltar={() => setValObra(null)} />
           )}
         </main>
       </div>
@@ -5719,6 +6026,9 @@ function App() {
                 <button onClick={() => setTela('registros')} style={estilo(estA('registros'))}>
                   <FileText size={16}/> Registros
                 </button>
+                <button onClick={() => setTela('ferramentas')} style={estilo(estA('ferramentas'))}>
+                  <Wrench size={16}/> Ferramentas
+                </button>
                 <button onClick={() => setTela('relatorios')} style={estilo(estA('relatorios'))}>
                   <BarChart3 size={16}/> Relatórios
                 </button>
@@ -5767,6 +6077,13 @@ function App() {
             onVoltar={() => setTela('lista')}
             onSalvarAjuste={salvarAjusteRegistro}
             onExcluirDia={excluirRegistroDia}
+          />
+        )}
+        {tela === 'ferramentas' && (
+          <TelaChecklistsFerramenta
+            checklistsFerr={checklistsFerr}
+            onPdf={baixarPdfFerramentaSalvo}
+            onVoltar={() => setTela('lista')}
           />
         )}
         {tela === 'registros' && (
