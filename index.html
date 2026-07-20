@@ -147,6 +147,20 @@
     const EPIS = ["Capacete c/ jugular","Óculos de proteção (incolor)","Óculos de proteção (escuro)","Protetor auricular (plug)","Protetor auricular (concha)","Respirador PFF2 (poeira/sílica)","Respirador c/ filtro p/ vapores orgânicos","Colete refletivo de alta visibilidade","Luva de raspa/couro","Luva nitrílica (emulsão)","Luva antivibração","Calça e camisa manga longa (brim)","Botina de segurança c/ biqueira","Faixa/cinto lombar","Protetor solar","Chapéu árabe"];
     const CRITICAS = ["Escavação","Içamento de carga","Trabalho a quente","Eletricidade","Espaço confinado","Trabalho em altura","Mergulho"];
 
+    // Limite de caracteres por campo do cabeçalho (medido na largura real de cada modelo PDF).
+    // Trava a digitação para o texto não transbordar por cima de outros campos no PDF.
+    const LIMITES_CAB = {
+      eletricidade:{empresa:76,setor:61,local:26,lider:25,os:16,descricao:81},
+      altura:      {empresa:89,setor:73,local:29,lider:29,os:21,descricao:95},
+      escavacao:   {empresa:90,setor:74,local:29,lider:32,os:20,descricao:96},
+      confinado:   {empresa:55,setor:73,local:30,lider:30,os:20,descricao:96},
+      mergulho:    {empresa:90,setor:73,local:30,lider:30,os:20,descricao:96},
+      icamento:    {empresa:91,setor:75,local:29,lider:34,os:19,descricao:96},
+      quente:      {empresa:90,setor:68,local:36,lider:25,os:20,descricao:96},
+    };
+    // DTS (formato paisagem FR.026): limites por campo do cabeçalho.
+    const LIMITES_DTS = {empresa:60,numeroOs:16,elaborador:83,area:59,lider:156,atividade:88,local:46};
+
     function fmtData(d){ const dd=String(d.getDate()).padStart(2,"0"), mm=String(d.getMonth()+1).padStart(2,"0"); return dd+"/"+mm+"/"+d.getFullYear(); }
 
     // ===== Armazenamento local (IndexedDB) das DTS recentes no aparelho =====
@@ -736,21 +750,21 @@
                 <option value="__outra__">Outra (digitar)</option>
               </select>
               {empresa==="__outra__" &&
-                <input type="text" value={empresaOutra} onChange={e=>setEmpresaOutra(e.target.value)} placeholder="Nome da empresa" style={{marginTop:8}} />}
+                <input type="text" maxLength={LIMITES_DTS.empresa} value={empresaOutra} onChange={e=>setEmpresaOutra(e.target.value)} placeholder="Nome da empresa" style={{marginTop:8}} />}
             </div>
           )}
           <div className="field-row">
-            <div><label>Nº O.S.</label><input type="text" value={numeroOs} onChange={e=>setNumeroOs(e.target.value)} placeholder="Ex: 12345" /></div>
-            <div><label>Área / Setor</label><input type="text" value={area} onChange={e=>setArea(e.target.value)} /></div>
+            <div><label>Nº O.S.</label><input type="text" maxLength={LIMITES_DTS.numeroOs} value={numeroOs} onChange={e=>setNumeroOs(e.target.value)} placeholder="Ex: 12345" /></div>
+            <div><label>Área / Setor</label><input type="text" maxLength={LIMITES_DTS.area} value={area} onChange={e=>setArea(e.target.value)} /></div>
           </div>
           <label>Atividade a ser executada</label>
-          <input type="text" value={atividade} onChange={e=>setAtividade(e.target.value)} placeholder="Descreva a atividade do dia" />
+          <input type="text" maxLength={LIMITES_DTS.atividade} value={atividade} onChange={e=>setAtividade(e.target.value)} placeholder="Descreva a atividade do dia" />
           <label>Localização do trabalho</label>
-          <input type="text" value={local} onChange={e=>setLocal(e.target.value)} placeholder="Endereço / trecho" />
+          <input type="text" maxLength={LIMITES_DTS.local} value={local} onChange={e=>setLocal(e.target.value)} placeholder="Endereço / trecho" />
           <label>Elaborador da DTS</label>
-          <input type="text" value={elaborador} onChange={e=>setElaborador(e.target.value)} />
+          <input type="text" maxLength={LIMITES_DTS.elaborador} value={elaborador} onChange={e=>setElaborador(e.target.value)} />
           <label>Líder da frente de serviço</label>
-          <input type="text" value={lider} onChange={e=>setLider(e.target.value)} />
+          <input type="text" maxLength={LIMITES_DTS.lider} value={lider} onChange={e=>setLider(e.target.value)} />
         </div>
 
         <div className="section">
@@ -1141,6 +1155,7 @@
     ];
 
     function AppPTQuente({ onVoltar }) {
+      const LC = LIMITES_CAB.quente || {}; // limites de caracteres do cabeçalho (PT a Quente)
       const agora = useRef(new Date());
       const [numeroOs,setNumeroOs]=useState("");
       const [tipoEquipe,setTipoEquipe]=useState("contratada");
@@ -1333,18 +1348,18 @@
               {CONTRATADAS.map(c=><option key={c} value={c}>{c}</option>)}
               <option value="__outra__">Outra (digitar)</option>
             </select>
-            {empresa==="__outra__" && <input type="text" value={empresaOutra} onChange={e=>setEmpresaOutra(e.target.value)} placeholder="Nome da empresa" style={{marginTop:8}} />}
+            {empresa==="__outra__" && <input type="text" maxLength={LC.empresa} value={empresaOutra} onChange={e=>setEmpresaOutra(e.target.value)} placeholder="Nome da empresa" style={{marginTop:8}} />}
           </div>)}
           <div className="field-row">
-            <div><label>Nº O.S (TOA)</label><input type="text" value={numeroOs} onChange={e=>setNumeroOs(e.target.value)} /></div>
-            <div><label>Setor</label><input type="text" value={setor} onChange={e=>setSetor(e.target.value)} /></div>
+            <div><label>Nº O.S (TOA)</label><input type="text" maxLength={LC.os} value={numeroOs} onChange={e=>setNumeroOs(e.target.value)} /></div>
+            <div><label>Setor</label><input type="text" maxLength={LC.setor} value={setor} onChange={e=>setSetor(e.target.value)} /></div>
           </div>
           <label>Local do Trabalho</label>
-          <input type="text" value={local} onChange={e=>setLocal(e.target.value)} placeholder="Endereço / trecho" />
+          <input type="text" maxLength={LC.local} value={local} onChange={e=>setLocal(e.target.value)} placeholder="Endereço / trecho" />
           <label>Líder da atividade</label>
-          <input type="text" value={lider} onChange={e=>setLider(e.target.value)} />
+          <input type="text" maxLength={LC.lider} value={lider} onChange={e=>setLider(e.target.value)} />
           <label>Descrição do trabalho</label>
-          <input type="text" value={descricao} onChange={e=>setDescricao(e.target.value)} />
+          <input type="text" maxLength={LC.descricao} value={descricao} onChange={e=>setDescricao(e.target.value)} />
           <label>Turno</label>
           <div style={{display:"flex",gap:8}}>
             {["Manhã","Tarde","Noite"].map(t=>(
@@ -1516,7 +1531,7 @@
   "Há extintor de incêndio disponível para atividade ou sistema de combate a incêndio (hidrante) que alcance a atividade?"
 ];
 
-    const CONF_COORD = {"H": 841.68, "paginas": 2, "cab": {"empresa": [174.9, 68.0], "setor": [245.0, 54.9], "local": [86.6, 81.1], "lider": [278.9, 81.1], "os": [467.6, 78.7], "descricao": [150.6, 91.8], "empresa_apos": 193.2}, "contratada": {"quad": [81.2, 65.3], "quad_x0": 74.9, "quad_x1": 87.6, "quad_cy": 65.3, "quad_h": 10.1, "rotulo": {"x0": 86.5, "y0": 61.4, "x1": 174.9, "y1": 68.0}}, "itens": [[628.6, 325.5, 346.2, 369.0], [647.1, 325.5, 346.2, 369.0], [665.6, 325.5, 346.2, 369.0], [685.3, 325.5, 346.2, 369.0], [704.9, 325.5, 346.2, 369.0], [723.4, 325.5, 346.2, 369.0], [743.0, 325.5, 346.2, 369.0], [762.7, 325.5, 346.2, 369.0], [782.3, 325.5, 346.2, 369.0], [63.6, 325.5, 346.2, 369.0], [115.9, 325.5, 346.2, 369.0], [139.9, 325.5, 346.2, 369.0], [161.7, 325.5, 346.2, 369.0], [185.8, 325.5, 346.2, 369.0], [207.5, 325.5, 346.2, 369.0], [225.0, 325.5, 346.2, 369.0], [245.2, 324.4, 355.6, null]], "itensPag": [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1], "especiais_medicao": {"gases": {"oxigenio": 66.7, "inflamaveis": 130.6, "poeiras": 178.7, "toxicos": 386.5, "co": 242.3, "h2s": 302.2, "metano": 377.2, "outro": 304.7}, "vy": 392.2, "medidor": {"fabricante": [124.5, 340.7], "modelo": [303.7, 340.7], "calibracao": [477.6, 340.7], "hora": [56.5, 406.1], "responsavel": [267.8, 406.1]}}, "especiais": {"emergencia": [{"label": "Existe equipe para resgate?", "SIM": [232.5, 148.8], "NÃO": [262.1, 148.8]}]}, "segura": {"pag": 1, "SIM": [325.5, 89.7], "NÃO": [346.2, 89.7]}, "emissorPag": 1, "emissor_verif": {}, "trabalhadores": [[105.0, 476.6], [57.9, 494.0], [111.6, 511.4], [111.6, 528.9], [111.6, 546.3], [111.6, 563.7]], "trabalhadoresPag": 1, "trabalhadoresLabels": ["Supervisor de entrada", "Vigia", "Trabalhador Autorizado1", "Trabalhador Autorizado2", "Trabalhador Autorizado3", "Trabalhador Autorizado4"], "assinaturas": [{"i": 1, "cx": 258.4, "x0": 226.5, "x1": 290.4, "yb": 472.6, "cell_top": 465.6, "cell_bot": 483.0, "cell_cy": 474.3}, {"i": 2, "cx": 258.4, "x0": 226.5, "x1": 290.4, "yb": 490.0, "cell_top": 483.0, "cell_bot": 500.4, "cell_cy": 491.7}, {"i": 3, "cx": 258.4, "x0": 226.5, "x1": 290.4, "yb": 507.4, "cell_top": 500.4, "cell_bot": 517.9, "cell_cy": 509.1}, {"i": 4, "cx": 258.4, "x0": 226.5, "x1": 290.4, "yb": 524.8, "cell_top": 517.9, "cell_bot": 535.3, "cell_cy": 526.6}, {"i": 5, "cx": 258.4, "x0": 226.5, "x1": 290.4, "yb": 542.3, "cell_top": 535.3, "cell_bot": 552.7, "cell_cy": 544.0}, {"i": 6, "cx": 258.4, "x0": 226.5, "x1": 290.4, "yb": 559.7, "cell_top": 552.7, "cell_bot": 562.7, "cell_cy": 557.7}], "assinaturasPag": 1};
+    const CONF_COORD = {"H": 841.68, "paginas": 2, "cab": {"empresa": [174.9, 68.0], "setor": [245.0, 54.9], "local": [86.6, 81.1], "lider": [278.9, 81.1], "os": [467.6, 78.7], "descricao": [150.6, 91.8], "empresa_apos": 193.2}, "contratada": {"quad": [81.2, 65.3], "quad_x0": 74.9, "quad_x1": 87.6, "quad_cy": 65.3, "quad_h": 10.1, "rotulo": {"x0": 86.5, "y0": 61.4, "x1": 174.9, "y1": 68.0}}, "itens": [[628.6, 325.5, 346.2, 369.0], [647.1, 325.5, 346.2, 369.0], [665.6, 325.5, 346.2, 369.0], [685.3, 325.5, 346.2, 369.0], [704.9, 325.5, 346.2, 369.0], [723.4, 325.5, 346.2, 369.0], [743.0, 325.5, 346.2, 369.0], [762.7, 325.5, 346.2, 369.0], [782.3, 325.5, 346.2, 369.0], [63.6, 325.5, 346.2, 369.0], [115.9, 325.5, 346.2, 369.0], [139.9, 325.5, 346.2, 369.0], [161.7, 325.5, 346.2, 369.0], [185.8, 325.5, 346.2, 369.0], [207.5, 325.5, 346.2, 369.0], [225.0, 325.5, 346.2, 369.0], [245.2, 324.4, 355.6, null]], "itensPag": [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1], "especiais_medicao": {"gases": {"oxigenio": 66.7, "inflamaveis": 130.6, "poeiras": 178.7, "toxicos": 386.5, "co": 242.3, "h2s": 302.2, "metano": 377.2, "outro": 304.7}, "vy": 392.2, "medidor": {"fabricante": [124.5, 340.7], "modelo": [303.7, 340.7], "calibracao": [477.6, 340.7], "hora": [56.5, 406.1], "responsavel": [267.8, 406.1]}}, "especiais": {"emergencia": [{"label": "Existe equipe para resgate?", "SIM": [232.5, 148.8], "NÃO": [262.1, 148.8]}]}, "segura": {"pag": 1, "SIM": [325.5, 89.7], "NÃO": [346.2, 89.7]}, "emissorPag": 1, "emissor_verif": {}, "trabalhadores": [[105.0, 476.6], [57.9, 494.0], [111.6, 511.4], [111.6, 528.9], [111.6, 546.3], [111.6, 563.7]], "trabalhadoresPag": 1, "trabalhadoresLabels": ["Supervisor de entrada", "Vigia", "Trabalhador Autorizado1", "Trabalhador Autorizado2", "Trabalhador Autorizado3", "Trabalhador Autorizado4"], "assinaturas": [{"i": 1, "cx": 258.4, "x0": 226.5, "x1": 290.4, "yb": 472.6, "cell_top": 465.6, "cell_bot": 483.0, "cell_cy": 474.3}, {"i": 2, "cx": 258.4, "x0": 226.5, "x1": 290.4, "yb": 490.0, "cell_top": 483.0, "cell_bot": 500.4, "cell_cy": 491.7}, {"i": 3, "cx": 258.4, "x0": 226.5, "x1": 290.4, "yb": 507.4, "cell_top": 500.4, "cell_bot": 517.9, "cell_cy": 509.1}, {"i": 4, "cx": 258.4, "x0": 226.5, "x1": 290.4, "yb": 524.8, "cell_top": 517.9, "cell_bot": 535.3, "cell_cy": 526.6}, {"i": 5, "cx": 258.4, "x0": 226.5, "x1": 290.4, "yb": 542.3, "cell_top": 535.3, "cell_bot": 552.7, "cell_cy": 544.0}, {"i": 6, "cx": 258.4, "x0": 226.5, "x1": 290.4, "yb": 566.1, "cell_top": 552.7, "cell_bot": 570.1, "cell_cy": 561.4}], "assinaturasPag": 1};
 
     const PT_MERGULHO_ITENS = [
   "Está disponível na atividade manuais/instrução de operação (POM), equipamentos e tabelas de descompressão adequada?",
@@ -1608,6 +1623,7 @@ altura: {
 
     function AppPT({ desc, onVoltar }) {
       const C = desc.coord;
+      const LC = LIMITES_CAB[desc.tipo] || {}; // limites de caracteres do cabeçalho deste PT
       const agora = useRef(new Date());
       const [numeroOs,setNumeroOs]=useState("");
       const [tipoEquipe,setTipoEquipe]=useState("contratada");
@@ -1963,18 +1979,18 @@ altura: {
               {CONTRATADAS.map(c=><option key={c} value={c}>{c}</option>)}
               <option value="__outra__">Outra (digitar)</option>
             </select>
-            {empresa==="__outra__" && <input type="text" value={empresaOutra} onChange={e=>setEmpresaOutra(e.target.value)} placeholder="Nome da empresa" style={{marginTop:8}} />}
+            {empresa==="__outra__" && <input type="text" maxLength={LC.empresa} value={empresaOutra} onChange={e=>setEmpresaOutra(e.target.value)} placeholder="Nome da empresa" style={{marginTop:8}} />}
           </div>)}
           <div className="field-row">
-            <div><label>Nº O.S (TOA)</label><input type="text" value={numeroOs} onChange={e=>setNumeroOs(e.target.value)} /></div>
-            <div><label>Setor</label><input type="text" value={setor} onChange={e=>setSetor(e.target.value)} /></div>
+            <div><label>Nº O.S (TOA)</label><input type="text" maxLength={LC.os} value={numeroOs} onChange={e=>setNumeroOs(e.target.value)} /></div>
+            <div><label>Setor</label><input type="text" maxLength={LC.setor} value={setor} onChange={e=>setSetor(e.target.value)} /></div>
           </div>
           <label>Local do Trabalho</label>
-          <input type="text" value={local} onChange={e=>setLocal(e.target.value)} />
+          <input type="text" maxLength={LC.local} value={local} onChange={e=>setLocal(e.target.value)} />
           <label>Líder da atividade</label>
-          <input type="text" value={lider} onChange={e=>setLider(e.target.value)} />
+          <input type="text" maxLength={LC.lider} value={lider} onChange={e=>setLider(e.target.value)} />
           <label>Descrição do trabalho</label>
-          <input type="text" value={descricao} onChange={e=>setDescricao(e.target.value)} />
+          <input type="text" maxLength={LC.descricao} value={descricao} onChange={e=>setDescricao(e.target.value)} />
           <label>Turno</label>
           <div style={{display:"flex",gap:8}}>
             {["Manhã","Tarde","Noite"].map(t=>(
