@@ -89,7 +89,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V31";
+    const APP_VERSION = "V32";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://pxcrbgpycoifibrewqsx.supabase.co";
@@ -189,7 +189,7 @@
       return todos.filter(r => r.tipo==="dts" || (!r.tipo && (r.nome||"").startsWith("DTS")));
     }
     async function limparAntigas(){ // remove o que não é de hoje
-      try{ const hoje=new Date().toISOString().slice(0,10); const db=await abrirDB();
+      try{ const hoje=diaLocal(); const db=await abrirDB();
         const tx=db.transaction(STORE,"readwrite"); const st=tx.objectStore(STORE); const req=st.getAll();
         req.onsuccess=()=>{ (req.result||[]).forEach(it=>{ if((it.dataISO||"").slice(0,10)!==hoje) st.delete(it.id); }); };
       }catch(e){}
@@ -471,7 +471,7 @@
         const linhas=montarLinhas();
         return {
           numero_os:numeroOs,
-          data_atividade: agora.current.toISOString().slice(0,10),
+          data_atividade: diaLocal(agora.current),
           horario_emissao: fmtHora(agora.current),
           elaborador, lider_frente:lider, area_setor:area, atividade, localizacao:local,
           tipo_equipe:tipoEquipe, empresa:empresaEfetiva,
@@ -661,7 +661,7 @@
 
         setSalvando(true);
         try{
-          const hoje=agora.current.toISOString().slice(0,10);
+          const hoje=diaLocal(agora.current);
           const osBase=numeroOs.trim();
 
           // 1) detecta revisão: quantas DTS dessa OS já existem HOJE? (só dá p/ consultar online)
@@ -917,6 +917,32 @@
     // Aviso: isto é uma "cortina" visual, não proteção forte.
     const ADM_SENHA = "GS@2026";
 
+    // Devolve "YYYY-MM-DD" no FUSO LOCAL (não usa toISOString, que converte
+    // para UTC e joga o registro para o dia seguinte à noite no Brasil).
+    // Lê TODOS os registros de uma consulta, em blocos de 1000.
+    // O Supabase devolve no máximo 1000 linhas por requisição, mesmo sem
+    // .limit() — sem paginar, os mais antigos somem em silêncio.
+    async function buscarTudo(montarQuery){
+      const TAM=1000, MAX_BLOCOS=50;
+      let todos=[];
+      for(let bloco=0; bloco<MAX_BLOCOS; bloco++){
+        const de=bloco*TAM;
+        const { data, error }=await montarQuery().range(de, de+TAM-1);
+        if(error) throw error;
+        const lote=data||[];
+        todos=todos.concat(lote);
+        if(lote.length<TAM) break;
+      }
+      return todos;
+    }
+
+    function diaLocal(d){
+      const x = d ? new Date(d) : new Date();
+      const mm = String(x.getMonth()+1).padStart(2,"0");
+      const dd = String(x.getDate()).padStart(2,"0");
+      return x.getFullYear()+"-"+mm+"-"+dd;
+    }
+
     // cfg define qual documento este painel administra. Padrão = DTS (comportamento original).
     const CFG_DTS={ tabela:"dts", colab:"dts_colaborador", fk:"dts_id", rotulo:"DTS", prefixo:"DTS",
       colTitulo:"atividade", colLocal:"localizacao", colLider:"lider_frente",
@@ -944,12 +970,16 @@
       async function buscar(){
         setCarregando(true); setMsg("");
         try{
-          let q=supa.from(cfg.tabela).select(cfg.select).order("created_at",{ascending:false});
-          if(de) q=q.gte("data_atividade",de);
-          if(ate) q=q.lte("data_atividade",ate);
-          if(cfg.filtroTipo && tipoFiltro) q=q.eq("tipo",tipoFiltro);
-          const { data, error }=await q;
-          if(error) throw error;
+          const montar=()=>{
+            let q=supa.from(cfg.tabela).select(cfg.select)
+                   .is("excluido_em",null)                 // esconde o que está na lixeira
+                   .order("created_at",{ascending:false});
+            if(de) q=q.gte("data_atividade",de);
+            if(ate) q=q.lte("data_atividade",ate);
+            if(cfg.filtroTipo && tipoFiltro) q=q.eq("tipo",tipoFiltro);
+            return q;
+          };
+          const data=await buscarTudo(montar);            // paginado: sem limite de 1000
           setLista(data||[]);
           if(!data || !data.length) setMsg("Nenhum registro encontrado no período.");
         }catch(e){ setMsg("Erro: "+e.message); }
@@ -1014,46 +1044,57 @@
       // ---- EXCLUSÃO por período (com confirmação por senha) ----
       async function excluirPeriodo(){
         if(!de || !ate){ alert("Para excluir, defina o período (data De e Até)."); return; }
-        const conf = window.prompt("ATENÇÃO: esta ação é PERMANENTE.\n\nVai excluir TODOS os registros de "+cfg.rotulo+" de "+de+" até "+ate+" (registros e PDFs).\n\nDigite a senha do administrador para confirmar:");
+        // Descreve exatamente o que será afetado, incluindo o filtro de tipo.
+        const rotuloTipo = (cfg.filtroTipo && tipoFiltro)
+          ? ((cfg.tipos||[]).find(t=>t[0]===tipoFiltro)||["",tipoFiltro])[1]
+          : null;
+        const alvoTxt = rotuloTipo ? (cfg.rotulo+" do tipo \""+rotuloTipo+"\"") : ("TODOS os registros de "+cfg.rotulo);
+        const conf = window.prompt("Enviar para a LIXEIRA:\n\n"+alvoTxt+"\nde "+de+" até "+ate+".\n\nOs registros saem das listagens, mas podem ser restaurados depois. Os PDFs são mantidos.\n\nDigite a senha do administrador para confirmar:");
         if(conf===null) return; // cancelou
-        if(conf!==ADM_SENHA){ alert("Senha incorreta. Nada foi excluído."); return; }
+        if(conf!==ADM_SENHA){ alert("Senha incorreta. Nada foi alterado."); return; }
         setCarregando(true); setMsg("");
         try{
-          // 1) busca as DTS do período (para pegar ids e pdf_paths)
-          let q=supa.from(cfg.tabela).select("id,pdf_path");
-          if(de) q=q.gte("data_atividade",de);
-          if(ate) q=q.lte("data_atividade",ate);
-          const { data:alvos, error:e0 }=await q;
-          if(e0) throw e0;
-          if(!alvos || !alvos.length){ setMsg("Nenhum registro no período para excluir."); setCarregando(false); return; }
+          // 1) busca os alvos do período — PAGINADO e com os MESMOS filtros da tela
+          const montar=()=>{
+            let q=supa.from(cfg.tabela).select("id").is("excluido_em",null);
+            if(de) q=q.gte("data_atividade",de);
+            if(ate) q=q.lte("data_atividade",ate);
+            if(cfg.filtroTipo && tipoFiltro) q=q.eq("tipo",tipoFiltro);   // <-- filtro de tipo agora é respeitado
+            return q;
+          };
+          const alvos=await buscarTudo(montar);
+          if(!alvos || !alvos.length){ setMsg("Nenhum registro no período para enviar à lixeira."); setCarregando(false); return; }
           const ids=alvos.map(a=>a.id);
-          const paths=alvos.map(a=>a.pdf_path).filter(Boolean);
-          // 2) apaga os PDFs do Storage
-          if(paths.length){ const { error:eS }=await supa.storage.from("dts-pdfs").remove(paths); if(eS) console.warn("storage remove:",eS.message); }
-          // 3) apaga colaboradores vinculados (FK) e depois as DTS
-          await supa.from(cfg.colab).delete().in(cfg.fk,ids);
-          const { error:eD }=await supa.from(cfg.tabela).delete().in("id",ids);
-          if(eD) throw eD;
-          setMsg("Excluídos "+ids.length+" registros do período.");
+          // 2) LIXEIRA: marca como excluído em vez de apagar. Os PDFs do
+          //    Storage são MANTIDOS, senão não haveria como restaurar.
+          const carimbo={ excluido_em:new Date().toISOString(), excluido_por:"admin" };
+          for(let i=0;i<ids.length;i+=500){
+            const fatia=ids.slice(i,i+500);
+            const { error:eD }=await supa.from(cfg.tabela).update(carimbo).in("id",fatia);
+            if(eD) throw eD;
+          }
+          setMsg("Enviados para a lixeira: "+ids.length+" registro(s)."+(rotuloTipo?" (tipo: "+rotuloTipo+")":""));
           setLista([]);
-        }catch(e){ setMsg("Erro ao excluir: "+e.message); }
+        }catch(e){ setMsg("Erro ao enviar para a lixeira: "+e.message); }
         finally{ setCarregando(false); }
       }
 
       async function excluirUma(item){
         const desc=((item[cfg.colTitulo])||cfg.rotulo)+" — OS "+(item.numero_os||"-");
-        const conf=window.prompt("Excluir PERMANENTEMENTE este registro?\n\n"+desc+"\n\nDigite a senha do administrador para confirmar:");
+        const conf=window.prompt("Enviar este registro para a LIXEIRA?\n\n"+desc+"\n\nEle sai das listagens, mas pode ser restaurado depois. O PDF é mantido.\n\nDigite a senha do administrador para confirmar:");
         if(conf===null) return;
-        if(conf!==ADM_SENHA){ alert("Senha incorreta. Nada foi excluído."); return; }
+        if(conf!==ADM_SENHA){ alert("Senha incorreta. Nada foi alterado."); return; }
         setCarregando(true); setMsg("");
         try{
-          if(item.pdf_path){ const { error:eS }=await supa.storage.from("dts-pdfs").remove([item.pdf_path]); if(eS) console.warn("storage remove:",eS.message); }
-          await supa.from(cfg.colab).delete().eq(cfg.fk,item.id);
-          const { error:eD }=await supa.from(cfg.tabela).delete().eq("id",item.id);
+          // LIXEIRA: marca como excluído; o PDF do Storage é MANTIDO para
+          // permitir a restauração do registro.
+          const { error:eD }=await supa.from(cfg.tabela)
+            .update({ excluido_em:new Date().toISOString(), excluido_por:"admin" })
+            .eq("id",item.id);
           if(eD) throw eD;
           setLista(l=>l.filter(x=>x.id!==item.id));
-          setMsg("Registro excluído.");
-        }catch(e){ setMsg("Erro ao excluir: "+e.message); }
+          setMsg("Registro enviado para a lixeira.");
+        }catch(e){ setMsg("Erro ao enviar para a lixeira: "+e.message); }
         finally{ setCarregando(false); }
       }
 
@@ -1108,7 +1149,7 @@
             {lista.length>0 && <button className="btn btn-light" onClick={baixarTodos}>Baixar todos (PDF único)</button>}
             <button onClick={excluirPeriodo} disabled={carregando}
               style={{padding:"11px 16px",borderRadius:8,border:"1px solid #A32D2D",background:"#fff",color:"#A32D2D",fontSize:14,fontWeight:600,cursor:"pointer"}}>
-              Excluir período
+              Enviar período à lixeira
             </button>
           </div>
           <p style={{fontSize:12,color:"#999",margin:"8px 0 0"}}>A exclusão remove os registros e os PDFs do período definido em "De/Até". Pede a senha do administrador para confirmar e é permanente.</p>
@@ -1130,7 +1171,7 @@
                       <input type="file" accept="application/pdf" style={{display:"none"}} onChange={e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=""; anexarPdf(item,f); }} />
                     </label>
                 }
-                <button style={{fontSize:13,padding:"7px 10px",borderRadius:8,border:"1px solid #A32D2D",background:"#fff",color:"#A32D2D",cursor:"pointer"}} onClick={()=>excluirUma(item)} title="Excluir este registro">Excluir</button>
+                <button style={{fontSize:13,padding:"7px 10px",borderRadius:8,border:"1px solid #A32D2D",background:"#fff",color:"#A32D2D",cursor:"pointer"}} onClick={()=>excluirUma(item)} title="Enviar este registro para a lixeira">Lixeira</button>
               </div>
             ))}
           </div>
@@ -1266,7 +1307,7 @@
 
       function montarRegistro(){
         return {
-          numero_os:numeroOs, data_atividade:agora.current.toISOString().slice(0,10),
+          numero_os:numeroOs, data_atividade:diaLocal(agora.current),
           horario_emissao:fmtHora(agora.current), turno,
           tipo:"quente", tipo_equipe:tipoEquipe, empresa:empresaEfetiva, setor,
           local_trabalho:local, lider_atividade:lider, descricao_trabalho:descricao,
@@ -1305,7 +1346,7 @@
 
         setSalvando(true);
         try{
-          const hoje=agora.current.toISOString().slice(0,10);
+          const hoje=diaLocal(agora.current);
           const osBase=numeroOs.trim(); let osEfetiva=osBase; const online=navigator.onLine;
           if(online){ try{ const {data:ex}=await supa.from("pt").select("id").eq("tipo","quente").eq("numero_os_base",osBase).eq("data_atividade",hoje);
             const n=(ex||[]).length; if(n>0) osEfetiva=osBase+" Rev."+String(n).padStart(2,"0"); }catch(_){} }
@@ -2000,7 +2041,7 @@ altura: {
       function montarRegistro(osEfetiva,osBase){
         return {
           tipo:desc.tipo, numero_os:osEfetiva, numero_os_base:osBase,
-          data_atividade:agora.current.toISOString().slice(0,10),
+          data_atividade:diaLocal(agora.current),
           horario_emissao:fmtHora(agora.current), turno,
           tipo_equipe:tipoEquipe, empresa:empresaEfetiva, setor,
           local_trabalho:local, lider_atividade:lider, descricao_trabalho:descricao,
@@ -2041,7 +2082,7 @@ altura: {
 
         setSalvando(true);
         try{
-          const hoje=agora.current.toISOString().slice(0,10);
+          const hoje=diaLocal(agora.current);
           const osBase=numeroOs.trim(); let osEfetiva=osBase; const online=navigator.onLine;
           if(online){ try{ const {data:ex}=await supa.from("pt").select("id").eq("tipo",desc.tipo).eq("numero_os_base",osBase).eq("data_atividade",hoje);
             const n=(ex||[]).length; if(n>0) osEfetiva=osBase+" Rev."+String(n).padStart(2,"0"); }catch(_){} }
