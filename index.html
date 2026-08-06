@@ -10,9 +10,59 @@
     // Registra o service worker (modo offline). Falha silenciosa se não suportado.
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
-        navigator.serviceWorker.register("sw.js").catch(()=>{});
+        navigator.serviceWorker.register("sw.js").then(function(reg){
+          window.__swReg = reg;
+          // detecta versão nova baixada enquanto o app está aberto
+          reg.addEventListener("updatefound", function(){
+            var novo = reg.installing;
+            if(!novo) return;
+            novo.addEventListener("statechange", function(){
+              if(novo.state === "installed" && navigator.serviceWorker.controller){
+                window.dispatchEvent(new Event("sw-update"));
+              }
+            });
+          });
+        }).catch(()=>{});
+      });
+      // ao voltar para o app, procura atualização
+      document.addEventListener("visibilitychange", function(){
+        if(!document.hidden && window.__swReg){ try{ window.__swReg.update(); }catch(e){} }
       });
     }
+    // ---- Aviso de nova versão ----
+    // Faixa em HTML puro (fora do React) para não interferir na tela do app.
+    // NÃO recarrega sozinho: se o operador estiver preenchendo um documento,
+    // um reload automático perderia o que ele digitou. Ele decide quando atualizar.
+    function mostrarAvisoVersao() {
+      if (document.getElementById('faixa-atualizar')) return;
+      var f = document.createElement('div');
+      f.id = 'faixa-atualizar';
+      f.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#C8141E;color:#fff;'
+        + 'padding:12px 14px;display:flex;align-items:center;gap:12px;font:600 14px system-ui,sans-serif;'
+        + 'box-shadow:0 -2px 12px rgba(0,0,0,.25)';
+      var t = document.createElement('span');
+      t.textContent = 'Nova versão disponível.';
+      t.style.flex = '1';
+      var b = document.createElement('button');
+      b.textContent = 'Atualizar';
+      b.style.cssText = 'background:#fff;color:#C8141E;border:none;border-radius:8px;padding:8px 16px;'
+        + 'font:700 14px system-ui,sans-serif;cursor:pointer';
+      b.onclick = function () {
+        if (navigator.serviceWorker.controller) {
+          try { navigator.serviceWorker.controller.postMessage('SKIP_WAITING'); } catch (e) {}
+        }
+        location.reload();
+      };
+      var x = document.createElement('button');
+      x.textContent = 'Agora não';
+      x.style.cssText = 'background:transparent;color:rgba(255,255,255,.85);border:none;'
+        + 'font:600 13px system-ui,sans-serif;cursor:pointer';
+      x.onclick = function () { f.remove(); };
+      f.appendChild(t); f.appendChild(x); f.appendChild(b);
+      document.body.appendChild(f);
+    }
+    window.addEventListener('sw-update', mostrarAvisoVersao);
+
   </script>
 
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -89,7 +139,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V32";
+    const APP_VERSION = "V34";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://pxcrbgpycoifibrewqsx.supabase.co";
@@ -99,12 +149,12 @@
     // ===== CATÁLOGO POR ETAPAS =====
     const ETAPAS = [
       { id:"mobilizacao", nome:"Mobilização", riscos:[
-        { nome:"Atropelamento / colisão no deslocamento de pessoas e veículos", nivel:"A", controle:["Planejamento da rota","Isolamento da área de descarga"], protecao:[], suporte:["DDS","Procedimento de mobilização","Supervisão"] },
+        { nome:"Atropelamento / colisão no deslocamento de pessoas e veículos", nivel:"A", controle:["Planejamento da rota","Isolamento da área de descarga"], protecao:["Tela cerquite para isolamento físico"], suporte:["DDS","Procedimento de mobilização","Supervisão"] },
         { nome:"Queda de materiais/ferramentas no transporte e descarga", nivel:"M", controle:["Amarração e acomodação adequada da carga"], protecao:[], suporte:["Treinamento"] },
         { nome:"Desorganização do canteiro / tropeço", nivel:"B", controle:["Definição de áreas de armazenamento"], protecao:[], suporte:["Ordem e limpeza"] },
       ]},
       { id:"isolamento", nome:"Isolamento e Sinalização da área", riscos:[
-        { nome:"Atropelamento, batida contra, queda de mesmo nível", nivel:"M", controle:["Manter o local organizado","Não espalhar pedras/material","Definir caminho seguro para pedestres"], protecao:["Pedestais e fitas zebradas para isolamento","Cones para sinalização","Colete refletivo"], suporte:["Atividade supervisionada pelo líder da frente","DDS diário sobre organização e circulação segura"] },
+        { nome:"Atropelamento, batida contra, queda de mesmo nível", nivel:"M", controle:["Manter o local organizado","Não espalhar pedras/material","Definir caminho seguro para pedestres"], protecao:["Tela cerquite para isolamento físico","Pedestais e fitas zebradas para isolamento","Cones para sinalização","Colete refletivo"], suporte:["Atividade supervisionada pelo líder da frente","DDS diário sobre organização e circulação segura"] },
       ]},
       { id:"escav_manual", nome:"Escavação com ferramentas manuais", riscos:[
         { nome:"Cortes, escoriações, perfurações", nivel:"M", controle:["Inspecionar ferramentas antes do uso","Atenção com mãos e pés","Não improvisar ferramentas","Não usar ferramentas danificadas"], protecao:["Luvas de segurança tipo raspa ou pigmentada","Botina com biqueira"], suporte:["Treinamento nas NRs 06, 11, 12 e 18","Instrução de uso correto de ferramentas manuais"] },
@@ -128,7 +178,7 @@
         { nome:"Cortes, escoriações, perfurações", nivel:"M", controle:["Inspecionar ferramentas manuais","Atenção com mãos e pés","Não improvisar ferramentas","Não usar ferramentas danificadas"], protecao:["Luvas de segurança tipo raspa ou pigmentada","Botina com biqueira"], suporte:["Treinamento nas NRs 06, 11, 12 e 18","DDS sobre compactação e reaterro seguro"] },
       ]},
       { id:"reaterro", nome:"Reaterro", riscos:[
-        { nome:"Esmagamento de membros", nivel:"A", controle:["Isolamento da área","Distância segura do equipamento"], protecao:[], suporte:["Comunicação operador/equipe","Supervisão"] },
+        { nome:"Esmagamento de membros", nivel:"A", controle:["Isolamento da área","Distância segura do equipamento"], protecao:["Tela cerquite para isolamento físico"], suporte:["Comunicação operador/equipe","Supervisão"] },
         { nome:"Lesão por esforço repetitivo (LER)", nivel:"M", controle:["Lançamento em camadas","Divisão de tarefas","Uso de ferramentas adequadas"], protecao:[], suporte:["Treinamento ergonômico / levantamento manual"] },
         { nome:"Ruído e vibração da placa/sapo compactador", nivel:"M", controle:["Revezamento de operadores"], protecao:[], suporte:["Treinamento"] },
         { nome:"Poeira em suspensão (material seco)", nivel:"M", controle:["Umidificação do material"], protecao:[], suporte:["Treinamento","DDS"] },
@@ -638,6 +688,34 @@
           }
         }
 
+        // ---- numeração real das páginas ----
+        // O modelo traz "Página: 1 de 2" (cabeçalho) e "1/2" (rodapé) impressos.
+        // Com páginas de continuação isso fica errado, então cobrimos e reescrevemos.
+        // Atenção: no modelo, a célula da numeração fica em alturas diferentes na
+        // folha 1 (interior y 61..70) e na folha de assinaturas (interior y 74.3..82.5).
+        // A folha de assinaturas é sempre a ÚLTIMA; as demais são cópias da folha 1.
+        {
+          const todas=pdfDoc.getPages();
+          const total=todas.length;
+          todas.forEach((pg,i)=>{
+            const n=i+1;
+            const ultima = (i===total-1);
+            // cabeçalho: célula entre as bordas verticais x 619.6 e 773.6
+            const topCober = ultima ? 76.6 : 63.3;
+            const altCober = ultima ? 7.7  : 8.5;
+            const baseTxt  = ultima ? 80.6 : 67.8;
+            cobrir(pg,621,topCober,151,altCober);
+            const tCab="Página: "+n+" de "+total;
+            const wCab=font.widthOfTextAtSize(tCab,7);
+            put(pg,696.6-wCab/2,baseTxt,tCab,7);
+            // rodapé direito: mesma posição nas duas folhas
+            cobrir(pg,764,596.6,11.5,6.8);
+            const tRod=n+"/"+total;
+            const wRod=font.widthOfTextAtSize(tRod,6);
+            put(pg,773.8-wRod,600.2,tRod,6);
+          });
+        }
+
         const bytes=await pdfDoc.save();
         const blob=new Blob([bytes],{type:"application/pdf"}); const url=URL.createObjectURL(blob);
         const a=document.createElement("a"); a.href=url; a.download="DTS_"+(numeroOs||"sem_os")+".pdf";
@@ -965,6 +1043,7 @@
       const [tipoFiltro,setTipoFiltro]=useState("");
       const [lista,setLista]=useState([]);
       const [carregando,setCarregando]=useState(false);
+      const [prog,setProg]=useState(null);   // {feitos,total,restante} do "Baixar todos"
       const [msg,setMsg]=useState("");
 
       async function buscar(){
@@ -1012,11 +1091,13 @@
       async function baixarTodos(){
         const comPdf=lista.filter(i=>i.pdf_path);
         if(!comPdf.length){ alert("Nenhum PDF disponível para baixar."); return; }
-        setCarregando(true); setMsg("Unificando "+comPdf.length+" PDFs...");
+        setCarregando(true); setMsg("");
+        const t0=Date.now();
+        setProg({feitos:0,total:comPdf.length,restante:null});
         try{
           const { PDFDocument }=PDFLib;
           const unificado=await PDFDocument.create();
-          let ok=0, falhas=0;
+          let ok=0, falhas=0, processados=0;
           for(const item of comPdf){
             try{
               const { data, error }=await supa.storage.from("dts-pdfs").download(item.pdf_path);
@@ -1027,6 +1108,13 @@
               paginas.forEach(p=>unificado.addPage(p));
               ok++;
             }catch(e){ falhas++; console.warn("falha em",item.pdf_path,e.message); }
+            processados++;
+            // estimativa: tempo médio por arquivo x quantos faltam
+            const medio=(Date.now()-t0)/processados;
+            const faltam=comPdf.length-processados;
+            setProg({feitos:processados,total:comPdf.length,restante:faltam?Math.round(medio*faltam/1000):0});
+            // devolve o controle ao navegador para a barra realmente repintar
+            await new Promise(r=>setTimeout(r,0));
           }
           if(!ok){ setMsg("Não foi possível baixar nenhum PDF."); setCarregando(false); return; }
           const bytesFinal=await unificado.save();
@@ -1038,7 +1126,7 @@
           document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
           setMsg("PDF unificado gerado com "+ok+" "+cfg.rotulo+(falhas?(" ("+falhas+" falharam)"):"")+".");
         }catch(e){ setMsg("Erro ao unificar: "+e.message); }
-        finally{ setCarregando(false); }
+        finally{ setCarregando(false); setProg(null); }
       }
 
       // ---- EXCLUSÃO por período (com confirmação por senha) ----
@@ -1153,6 +1241,24 @@
             </button>
           </div>
           <p style={{fontSize:12,color:"#999",margin:"8px 0 0"}}>A exclusão remove os registros e os PDFs do período definido em "De/Até". Pede a senha do administrador para confirmar e é permanente.</p>
+          {prog && (
+            <div style={{margin:"10px 0",padding:"10px 12px",border:"1px solid #e3e3e3",borderRadius:8,background:"#fafafa"}}>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:"#555",marginBottom:6}}>
+                <span>Unificando PDFs — {prog.feitos} de {prog.total}</span>
+                <span>{Math.round(prog.feitos/prog.total*100)}%</span>
+              </div>
+              <div style={{height:8,background:"#e6e6e6",borderRadius:99,overflow:"hidden"}}>
+                <div style={{height:"100%",width:(prog.feitos/prog.total*100)+"%",background:"#C8141E",transition:"width .2s"}}></div>
+              </div>
+              <div style={{fontSize:12,color:"#888",marginTop:6}}>
+                {prog.restante==null ? "Calculando tempo restante..."
+                  : prog.restante>0 ? ("Tempo restante estimado: "+(prog.restante>=60
+                      ? (Math.floor(prog.restante/60)+" min "+(prog.restante%60)+" s")
+                      : (prog.restante+" s")))
+                  : "Finalizando o arquivo..."}
+              </div>
+            </div>
+          )}
           {msg && <p style={{color:"#666",fontSize:13}}>{msg}</p>}
           <div style={{marginTop:16}}>
             {lista.map(item=>(
@@ -2646,6 +2752,33 @@ altura: {
       // inicio | dts_hub | dts | dts_adm | pt_hub | pt_menu | pt_quente | pt_adm
       const [modo,setModo]=useState("inicio");
       const [qrApp,setQrApp]=useState(false);
+
+      // ---- Botão VOLTAR do Android ----
+      // Sem isso, o voltar do celular fecha o app. Aqui ele recua uma tela por vez:
+      // cada avanço empilha uma entrada no histórico e o voltar desempilha.
+      const PAI_TELA={
+        dts_hub:"inicio", dts:"dts_hub", dts_adm:"dts_hub",
+        pt_hub:"inicio", pt_menu:"pt_hub", pt_adm:"pt_hub",
+        pt_quente:"pt_menu", pt_eletricidade:"pt_menu", pt_altura:"pt_menu",
+        pt_escavacao:"pt_menu", pt_confinado:"pt_menu", pt_mergulho:"pt_menu",
+        pt_icamento:"pt_menu"
+      };
+      const voltandoRef=React.useRef(false);
+      useEffect(()=>{
+        // se a mudança veio do próprio voltar, não empilha de novo
+        if(voltandoRef.current){ voltandoRef.current=false; return; }
+        if(modo!=="inicio" || qrApp) window.history.pushState({tela:modo},"");
+      },[modo,qrApp]);
+      useEffect(()=>{
+        const aoVoltar=()=>{
+          voltandoRef.current=true;
+          if(qrApp){ setQrApp(false); return; }       // fecha o QR primeiro
+          if(modo!=="inicio"){ setModo(PAI_TELA[modo]||"inicio"); return; }
+          voltandoRef.current=false;                   // já no início: deixa sair do app
+        };
+        window.addEventListener("popstate",aoVoltar);
+        return ()=>window.removeEventListener("popstate",aoVoltar);
+      },[modo,qrApp]);
 
       // DTS
       if(modo==="dts_hub") return <DocHub titulo="DTS" sub="Discussão de Trabalho Seguro" onVoltar={()=>setModo("inicio")}
