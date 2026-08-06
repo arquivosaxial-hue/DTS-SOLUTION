@@ -87,6 +87,7 @@
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', function() {
         navigator.serviceWorker.register('sw.js').then(function(reg) {
+          window.__swReg = reg;
           // Detecta nova versão disponível
           reg.addEventListener('updatefound', function() {
             const novo = reg.installing;
@@ -100,7 +101,45 @@
           });
         }).catch(function(err) { console.warn('SW falhou:', err); });
       });
+      // ao voltar para o app, procura atualização
+      document.addEventListener('visibilitychange', function(){
+        if(!document.hidden && window.__swReg){ try{ window.__swReg.update(); }catch(e){} }
+      });
     }
+    // ---- Aviso de nova versão ----
+    // Faixa em HTML puro (fora do React) para não interferir na tela do app.
+    // NÃO recarrega sozinho: se o operador estiver preenchendo um documento,
+    // um reload automático perderia o que ele digitou. Ele decide quando atualizar.
+    function mostrarAvisoVersao() {
+      if (document.getElementById('faixa-atualizar')) return;
+      var f = document.createElement('div');
+      f.id = 'faixa-atualizar';
+      f.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#C8141E;color:#fff;'
+        + 'padding:12px 14px;display:flex;align-items:center;gap:12px;font:600 14px system-ui,sans-serif;'
+        + 'box-shadow:0 -2px 12px rgba(0,0,0,.25)';
+      var t = document.createElement('span');
+      t.textContent = 'Nova versão disponível.';
+      t.style.flex = '1';
+      var b = document.createElement('button');
+      b.textContent = 'Atualizar';
+      b.style.cssText = 'background:#fff;color:#C8141E;border:none;border-radius:8px;padding:8px 16px;'
+        + 'font:700 14px system-ui,sans-serif;cursor:pointer';
+      b.onclick = function () {
+        if (navigator.serviceWorker.controller) {
+          try { navigator.serviceWorker.controller.postMessage('SKIP_WAITING'); } catch (e) {}
+        }
+        location.reload();
+      };
+      var x = document.createElement('button');
+      x.textContent = 'Agora não';
+      x.style.cssText = 'background:transparent;color:rgba(255,255,255,.85);border:none;'
+        + 'font:600 13px system-ui,sans-serif;cursor:pointer';
+      x.onclick = function () { f.remove(); };
+      f.appendChild(t); f.appendChild(x); f.appendChild(b);
+      document.body.appendChild(f);
+    }
+    window.addEventListener('sw-update', mostrarAvisoVersao);
+
   </script>
 
   <script type="text/babel" data-presets="react">
@@ -109,6 +148,7 @@ document.getElementById('boot-loader')?.classList.add('boot-hide');
 
 // React vem do CDN (UMD) - disponível como `React` global
 const { useState, useRef, useEffect } = React;
+const APP_VERSION = 'V7';   // versão exibida no rodapé da tela inicial
 
 // ============================================================
 // ÍCONES INLINE - paths SVG do Lucide embutidos no arquivo
@@ -1298,7 +1338,7 @@ function tabelaMotivosPdf(doc, regsMaquina, y, W, addPageCb) {
   if (paradas.length === 0) return y;
 
   const H = 297;
-  if (y + 18 > H - 12) { addPageCb && addPageCb(); y = 34; }
+  if (y + 18 > H - 12) { y = quebraPagina(doc, addPageCb, 9.5, 60); }
   doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.setTextColor(60);
   doc.text('MOTIVOS DA PARADA', 14, y); y += 5;
 
@@ -1309,7 +1349,7 @@ function tabelaMotivosPdf(doc, regsMaquina, y, W, addPageCb) {
   y += 6;
   doc.setFont('helvetica', 'normal'); doc.setTextColor(40);
   for (const p of paradas) {
-    if (y > H - 14) { addPageCb && addPageCb(); y = 34; }
+    if (y > H - 14) { y = quebraPagina(doc, addPageCb); }
     const dia = (p.dataRef || diaLocal(p.criadoEm)).split('-').reverse().slice(0,2).join('/');
     const operador = (p.operador && p.operador.trim()) ? p.operador.trim() : '—';
     const motivo = p.motivoParada || '—';
@@ -1327,15 +1367,28 @@ function tabelaMotivosPdf(doc, regsMaquina, y, W, addPageCb) {
 
 // Tabela "Trabalho por dia" (data | km ou horas) para uma máquina, usando o resumo já calculado.
 // Mostra só os dias com valor + total. Retorna o novo y.
+// Quebra de página segura: o callback redesenha o cabeçalho colorido (setTextColor(255)).
+// Sem restaurar a cor, todo o texto seguinte sai BRANCO sobre fundo branco — presente no
+// arquivo (aparece no Ctrl+F) mas invisível. Sempre usar isto em vez de chamar o callback direto.
+function quebraPagina(doc, addPageCb, tam, cor) {
+  if (addPageCb) addPageCb();
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(tam == null ? 8.5 : tam);
+  doc.setTextColor(cor == null ? 40 : cor);
+  return 34;
+}
+
 function tabelaTrabalhoPorDiaPdf(doc, R, maquina, y, W, addPageCb) {
   if (!maquina.possuiHorimetro) return y; // sem medidor não há km/horas
   const unidade = maquina.unidade === 'km' ? 'km' : 'h';
   const titulo = maquina.unidade === 'km' ? 'QUILOMETRAGEM POR DIA' : 'HORAS POR DIA';
   const porDia = (R && R.trabalhoPorDia) ? R.trabalhoPorDia : {};
-  const dias = Object.keys(porDia).filter(d => porDia[d] > 0).sort();
+  // mostra todos os dias com registro válido, inclusive os de valor 0
+  // (antes o filtro > 0 abria buracos no período)
+  const dias = Object.keys(porDia).filter(d => porDia[d] != null && !isNaN(porDia[d])).sort();
   const H = 297;
 
-  if (y + 16 > H - 12) { addPageCb && addPageCb(); y = 34; }
+  if (y + 16 > H - 12) { y = quebraPagina(doc, addPageCb, 9.5, 60); }
   doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.setTextColor(60);
   doc.text(titulo, 14, y); y += 5;
 
@@ -1362,7 +1415,7 @@ function tabelaTrabalhoPorDiaPdf(doc, R, maquina, y, W, addPageCb) {
 
   let total = 0;
   for (const d of dias) {
-    if (y > H - 14) { addPageCb && addPageCb(); y = 34; }
+    if (y > H - 14) { y = quebraPagina(doc, addPageCb); }
     const v = porDia[d];
     total += v;
     const op = opPorDia[d] ? opPorDia[d].trim() : '—';
@@ -1373,7 +1426,7 @@ function tabelaTrabalhoPorDiaPdf(doc, R, maquina, y, W, addPageCb) {
     doc.setDrawColor(235); doc.line(12, y-2, W-12, y-2);
   }
   // total
-  if (y > H - 14) { addPageCb && addPageCb(); y = 34; }
+  if (y > H - 14) { y = quebraPagina(doc, addPageCb); }
   doc.setFont('helvetica', 'bold'); doc.setTextColor(27,58,92);
   doc.text('TOTAL', colX[0], y);
   doc.text(`${Math.round(total * 10) / 10} ${unidade}`, colX[2], y);
@@ -1641,14 +1694,20 @@ function diasSemRegistro(registros, maquinas, ini, fim) {
   // dias com registro por máquina
   const comRegistro = {};
   for (const r of registros) {
-    const dia = diaLocal(r.criadoEm);
-    if (dia < ini || dia > fim) continue;
+    // data do FATO (lançamento retroativo), não a da digitação
+    const dia = r.dataRef || diaLocal(r.criadoEm);
+    if (!dia || dia < ini || dia > fim) continue;
     (comRegistro[r.maquinaId] = comRegistro[r.maquinaId] || new Set()).add(dia);
   }
   return maquinas.filter(m => m.ativa).map(m => {
     const feitos = comRegistro[m.id] || new Set();
-    const faltantes = dias.filter(dia => !feitos.has(dia));
-    return { maquina: m, faltantes, totalDias: dias.length };
+    // não cobra dia anterior ao início do contrato da máquina (nem ao corte global),
+    // porque o operador é impedido de lançar nesses dias
+    const corte = (m.dataInicioContrato && m.dataInicioContrato > DATA_INICIO_RETROATIVO)
+      ? m.dataInicioContrato : DATA_INICIO_RETROATIVO;
+    const diasCobraveis = dias.filter(dia => dia >= corte);
+    const faltantes = diasCobraveis.filter(dia => !feitos.has(dia));
+    return { maquina: m, faltantes, totalDias: diasCobraveis.length };
   }).filter(x => x.faltantes.length > 0);
 }
 
@@ -1894,7 +1953,7 @@ function gerarPdfPeriodo(resumo, registrosPeriodo, ini, fim) {
 }
 
 // Gera um PDF com TODOS os checklists do período (um por seção, detalhado + foto do painel)
-async function gerarPdfTodosRegistros(registrosPeriodo, ini, fim, maquinas) {
+async function gerarPdfTodosRegistros(registrosPeriodo, ini, fim, maquinas, onProg) {
   const mapaM = {};
   for (const m of (maquinas || [])) mapaM[m.id] = m;
   const { jsPDF } = window.jspdf;
@@ -1911,6 +1970,9 @@ async function gerarPdfTodosRegistros(registrosPeriodo, ini, fim, maquinas) {
   y = 34;
 
   const cron = [...registrosPeriodo].sort((a,b) => new Date(b.criadoEm) - new Date(a.criadoEm));
+
+  const tIni = Date.now();
+  if (onProg) onProg({ feitos: 0, total: cron.length, restante: null });
 
   for (let idx = 0; idx < cron.length; idx++) {
     const r = cron[idx];
@@ -1978,6 +2040,14 @@ async function gerarPdfTodosRegistros(registrosPeriodo, ini, fim, maquinas) {
       y = rowMaxBottom;
     }
     y += 6;
+
+    if (onProg) {
+      const feitos = idx + 1;
+      const medio = (Date.now() - tIni) / feitos;          // tempo médio por registro
+      const faltam = cron.length - feitos;
+      onProg({ feitos, total: cron.length, restante: faltam ? Math.round(medio * faltam / 1000) : 0 });
+      await new Promise(r => setTimeout(r, 0));            // deixa a barra repintar
+    }
   }
 
   doc.save(`checklists_${new Date().toISOString().slice(0,10)}.pdf`);
@@ -2823,6 +2893,7 @@ function TelaInicial({ onOperador, onFerramentas, onValidador, onAdmin, meusRegi
       )}
 
       <p style={{color:'rgba(255,255,255,.4)', fontSize:12, marginTop:32, textAlign:'center'}}>Grupo Solution · Gestão de Frota</p>
+      <p style={{color:'rgba(255,255,255,.3)', fontSize:11, marginTop:6, textAlign:'center', letterSpacing:.5}}>{APP_VERSION}</p>
     </div>
   );
 }
@@ -3509,6 +3580,7 @@ function CalendarioMaquina({ maquina, registros, ini, fim, onEditarDia }) {
 }
 
 function TelaRelatorios({ registros, maquinas, onVoltar, onSalvarAjuste, onExcluirDia, obraFixa }) {
+  const [prog, setProg] = useState(null);   // progresso do "Baixar todos"
   const hoje = diaLocal(new Date());
   const mesPassado = diaLocal(new Date(Date.now() - 30*86400000));
   const [ini, setIni] = useState(mesPassado);
@@ -3596,7 +3668,7 @@ function TelaRelatorios({ registros, maquinas, onVoltar, onSalvarAjuste, onExclu
           <button onClick={() => gerarPdfCalendarios(maquinasFiltradas, registrosFiltrados, resumo, ini, fim)} disabled={!maquinasFiltradas.length} style={{...S.botaoSec, opacity: maquinasFiltradas.length?1:.5}}>
             <Calendar size={18}/> Exportar calendário
           </button>
-          <button onClick={() => gerarPdfTodosRegistros(registrosPeriodo, ini, fim, maquinas)} disabled={!registrosPeriodo.length} style={{...S.botaoSec, opacity: registrosPeriodo.length?1:.5}}>
+          <button onClick={async () => { try { await gerarPdfTodosRegistros(registrosPeriodo, ini, fim, maquinas, setProg); } finally { setProg(null); } }} disabled={!registrosPeriodo.length} style={{...S.botaoSec, opacity: registrosPeriodo.length?1:.5}}>
             <FileText size={18}/> Exportar checklists completos
           </button>
           <button onClick={() => gerarPdfPeriodo(resumo, registrosPeriodo, ini, fim)} disabled={!resumo.length} style={{...S.botaoPrim, opacity: resumo.length?1:.5}}>
@@ -3604,6 +3676,23 @@ function TelaRelatorios({ registros, maquinas, onVoltar, onSalvarAjuste, onExclu
           </button>
         </div>
       </div>
+
+      {prog && (
+        <div style={{margin:'0 0 14px', padding:'10px 12px', border:'1px solid '+COR.borda, borderRadius:10, background:'#FAFAFA'}}>
+          <div style={{display:'flex', justifyContent:'space-between', fontSize:13, color:COR.cinza, fontWeight:600, marginBottom:6}}>
+            <span>Gerando PDF — {prog.feitos} de {prog.total}</span>
+            <span>{Math.round(prog.feitos/prog.total*100)}%</span>
+          </div>
+          <div style={{height:8, background:COR.borda, borderRadius:99, overflow:'hidden'}}>
+            <div style={{height:'100%', width:(prog.feitos/prog.total*100)+'%', background:COR.vermelho, transition:'width .2s'}}></div>
+          </div>
+          <div style={{fontSize:12, color:COR.cinza, marginTop:6}}>
+            {prog.restante==null ? 'Calculando tempo restante…'
+              : prog.restante>0 ? ('Tempo restante estimado: '+(prog.restante>=60 ? (Math.floor(prog.restante/60)+' min '+(prog.restante%60)+' s') : (prog.restante+' s')))
+              : 'Finalizando o arquivo…'}
+          </div>
+        </div>
+      )}
 
       {fMaquina !== 'todas' && maquinasFiltradas.length === 1 && (
         <CalendarioMaquina maquina={maquinasFiltradas[0]} registros={registrosFiltrados} ini={ini} fim={fim} onEditarDia={(data, registro) => setEditandoDia({ maquina: maquinasFiltradas[0], data, registro })} />
@@ -3990,7 +4079,9 @@ function EditorStatusDia({ maquina, data, registro, onSalvar, onFechar, onExclui
   async function salvar() {
     if (status === 'nao_funcional' && !motivo) return;
     setSalvando(true);
-    const horiNum = (status === 'funcional' && temMedidor && horimetro !== '' && !isNaN(Number(horimetro))) ? Number(horimetro) : null;
+    // o medidor vale para qualquer status: sem isso, leitura errada em dia
+    // 'sem atividade' ou 'não funcional' ficava impossível de corrigir.
+    const horiNum = (temMedidor && horimetro !== '' && !isNaN(Number(horimetro))) ? Number(horimetro) : null;
     await onSalvar({ status, motivo: status === 'nao_funcional' ? motivo : '', observacao: obs, horimetro: horiNum });
     setSalvando(false);
   }
@@ -4042,7 +4133,7 @@ function EditorStatusDia({ maquina, data, registro, onSalvar, onFechar, onExclui
           </div>
         )}
 
-        {status === 'funcional' && temMedidor && (
+        {temMedidor && (
           <div style={{marginBottom:14}}>
             <label style={S.rotulo}>{maquina.unidade === 'km' ? 'Hodômetro (km)' : 'Horímetro (horas)'}</label>
             <div style={{position:'relative'}}>
@@ -4099,6 +4190,7 @@ function EditorStatusDia({ maquina, data, registro, onSalvar, onFechar, onExclui
 // ADMIN: TELA DE REGISTROS (checklists recebidos)
 // ============================================================
 function TelaRegistros({ registros, maquinas, onVoltar, onExcluirPeriodo, onSalvarAjuste, onExcluirDia }) {
+  const [prog, setProg] = useState(null);   // progresso do "Baixar todos"
   const hoje = diaLocal(new Date());
   const mesPassado = diaLocal(new Date(Date.now() - 30*86400000));
   const [ini, setIni] = useState(mesPassado);
@@ -4177,9 +4269,25 @@ function TelaRegistros({ registros, maquinas, onVoltar, onExcluirPeriodo, onSalv
         <span style={{fontSize:13.5, color:COR.cinza, fontWeight:600, alignSelf:'center'}}>{noPeriodo.length} registro(s)</span>
       </div>
 
+{prog && (
+        <div style={{margin:'0 0 14px', padding:'10px 12px', border:'1px solid '+COR.borda, borderRadius:10, background:'#FAFAFA'}}>
+          <div style={{display:'flex', justifyContent:'space-between', fontSize:13, color:COR.cinza, fontWeight:600, marginBottom:6}}>
+            <span>Gerando PDF — {prog.feitos} de {prog.total}</span>
+            <span>{Math.round(prog.feitos/prog.total*100)}%</span>
+          </div>
+          <div style={{height:8, background:COR.borda, borderRadius:99, overflow:'hidden'}}>
+            <div style={{height:'100%', width:(prog.feitos/prog.total*100)+'%', background:COR.vermelho, transition:'width .2s'}}></div>
+          </div>
+          <div style={{fontSize:12, color:COR.cinza, marginTop:6}}>
+            {prog.restante==null ? 'Calculando tempo restante…'
+              : prog.restante>0 ? ('Tempo restante estimado: '+(prog.restante>=60 ? (Math.floor(prog.restante/60)+' min '+(prog.restante%60)+' s') : (prog.restante+' s')))
+              : 'Finalizando o arquivo…'}
+          </div>
+        </div>
+      )}
       {/* Ações do período */}
       <div style={{display:'flex', gap:10, flexWrap:'wrap', marginBottom:18}}>
-        <button onClick={() => gerarPdfTodosRegistros(noPeriodo, ini, fim, maquinas)} disabled={noPeriodo.length===0} style={{...S.botaoPrim, opacity:noPeriodo.length?1:.5}}>
+        <button onClick={async () => { try { await gerarPdfTodosRegistros(noPeriodo, ini, fim, maquinas, setProg); } finally { setProg(null); } }} disabled={noPeriodo.length===0} style={{...S.botaoPrim, opacity:noPeriodo.length?1:.5}}>
           <Download size={18}/> Baixar todos os checklists
         </button>
         <button onClick={() => setMostrarExcluir(true)} disabled={noPeriodo.length===0} style={{...S.botaoSec, color:COR.vermelho, borderColor:'#FECACA', opacity:noPeriodo.length?1:.5, marginLeft:'auto'}}>
@@ -5856,6 +5964,35 @@ function App() {
       .eq('id', o.id);
     recarregar();
   }
+
+  // ---------- BOTÃO VOLTAR DO ANDROID ----------
+  // Sem isso o voltar do celular fecha o app. Aqui ele recua uma tela por vez:
+  // sub-tela da gestão -> painel -> desloga -> início -> só então fecha.
+  const voltandoRef = useRef(false);
+  const nivelNav = [modo, logado, logadoValidador, tela, valObra, valObraRelatorio].join('|');
+  useEffect(() => {
+    if (voltandoRef.current) { voltandoRef.current = false; return; }
+    if (modo !== 'inicial') window.history.pushState({ tela: modo }, '');
+  }, [nivelNav]);
+
+  useEffect(() => {
+    const aoVoltar = () => {
+      voltandoRef.current = true;
+      // 1) sub-telas do validador
+      if (valObraRelatorio) { setValObraRelatorio(null); return; }
+      if (valObra) { setValObra(null); return; }
+      // 2) sub-telas da gestão (admin) voltam para a lista
+      if (modo === 'admin' && logado && tela !== 'lista') { setTela('lista'); return; }
+      // 3) painel logado -> desloga
+      if (modo === 'admin' && logado) { setLogado(false); setResponsavel(''); return; }
+      if (logadoValidador) { setLogadoValidador(false); setResponsavel(''); return; }
+      // 4) qualquer outro modo -> início
+      if (modo !== 'inicial') { setModo('inicial'); setTela('lista'); return; }
+      voltandoRef.current = false;   // já no início: deixa o Android fechar o app
+    };
+    window.addEventListener('popstate', aoVoltar);
+    return () => window.removeEventListener('popstate', aoVoltar);
+  }, [nivelNav]);
 
   // ---------- MODO INICIAL ----------
   const bannerProps = { online, pendentes: filaPendentes, sincronizando, onSincronizar: tentarSincronizar };
