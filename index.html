@@ -152,7 +152,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V37";
+    const APP_VERSION = "V38";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://pxcrbgpycoifibrewqsx.supabase.co";
@@ -349,19 +349,64 @@
     // assim a fila pode ser esvaziada de QUALQUER tela, e não só de dentro do
     // formulário de DTS como era antes.
 
+    // Identificador estável do documento, gerado UMA vez no aparelho e guardado na fila.
+    // É o que permite ao banco reconhecer um reenvio como repetição em vez de criar uma
+    // segunda cópia — o caso comum é a escrita chegar ao servidor e a resposta se perder,
+    // que em obra acontece o tempo todo.
+    function novoIdCliente(){
+      try{ if(window.crypto && crypto.randomUUID) return crypto.randomUUID(); }catch(_){}
+      return "c_"+Date.now()+"_"+Math.random().toString(36).slice(2,10);
+    }
+
+    // Nome que aparece no documento: revisão 0 é a OS original; da 1 em diante ganha sufixo.
+    function osComRevisao(osBase, revisao){
+      return (revisao>0) ? (osBase+" Rev."+String(revisao).padStart(2,"0")) : osBase;
+    }
+
+    const ERRO_DUPLICADO = "23505"; // unique_violation no Postgres
+    const eConflitoDe = (erro, trecho) =>
+      erro && erro.code===ERRO_DUPLICADO && String(erro.message||"").includes(trecho);
+
     // Sobe o PDF primeiro e só então insere o registro. Se o insert falhar, o PDF é
     // removido do Storage. Se os COLABORADORES falharem, o documento também é desfeito:
     // uma DTS/PT sem a equipe que participou não é um documento válido, e deixá-la no
     // banco faria a retentativa da fila criar uma segunda cópia completa.
-    async function enviarDocumento({ tabela, tabelaColab, chaveColab, caminhoPdf, registro, colaboradores, bytes }){
+    //
+    // A revisão é resolvida CONTRA O BANCO: propomos um número e, se outro aparelho tiver
+    // chegado primeiro, o índice único recusa e tentamos o próximo. Antes isso era uma
+    // contagem feita no cliente, e dois aparelhos reconectando juntos geravam o mesmo
+    // "Rev.01" para documentos diferentes.
+    async function enviarDocumento({ tabela, tabelaColab, chaveColab, caminhoPdf,
+                                     registro, colaboradores, bytes, osBase, revisaoInicial }){
       const { error:eUp } = await supa.storage.from("dts-pdfs")
         .upload(caminhoPdf, new Blob([bytes],{type:"application/pdf"}), { upsert:true, contentType:"application/pdf" });
       if(eUp) throw eUp; // sem PDF garantido, não insere o registro
 
-      const { data:ins, error } = await supa.from(tabela).insert({...registro, pdf_path:caminhoPdf}).select().single();
-      if(error){
+      let revisao = Number.isInteger(revisaoInicial) ? revisaoInicial : 0;
+      let ins=null, ultimoErro=null;
+
+      for(let tentativa=0; tentativa<25; tentativa++){
+        const linha = { ...registro, pdf_path:caminhoPdf };
+        if(osBase){ linha.revisao = revisao; linha.numero_os = osComRevisao(osBase, revisao); }
+
+        const r = await supa.from(tabela).insert(linha).select().single();
+        if(!r.error){ ins = r.data; break; }
+
+        // Já subiu antes: a primeira tentativa chegou e só a resposta se perdeu.
+        // Isso não é erro — é a duplicata sendo impedida, que é o objetivo.
+        if(eConflitoDe(r.error, "cliente_id")){
+          return { id:null, pdf_path:caminhoPdf, jaExistia:true };
+        }
+        // Outro aparelho pegou este número de revisão primeiro: tenta o próximo.
+        if(osBase && eConflitoDe(r.error, "os_dia_rev")){ revisao++; ultimoErro=r.error; continue; }
+
         try{ await supa.storage.from("dts-pdfs").remove([caminhoPdf]); }catch(_){}
-        throw error;
+        throw r.error;
+      }
+
+      if(!ins){
+        try{ await supa.storage.from("dts-pdfs").remove([caminhoPdf]); }catch(_){}
+        throw ultimoErro || new Error("não foi possível definir o número de revisão");
       }
 
       if(colaboradores && colaboradores.length){
@@ -373,39 +418,41 @@
           throw eColab;
         }
       }
-      return { id: ins.id, pdf_path: caminhoPdf };
+      return { id: ins.id, pdf_path: caminhoPdf, numero_os: ins.numero_os, revisao };
     }
 
-    function enviarDTSDoc(registro, colaboradores, bytes, osNome){
+    function enviarDTSDoc(registro, colaboradores, bytes, osNome, osBase, revisaoInicial){
       return enviarDocumento({
         tabela:"dts", tabelaColab:"dts_colaborador", chaveColab:"dts_id",
         caminhoPdf:"DTS_"+(osNome||"sem_os")+"_"+Date.now()+".pdf",
-        registro, colaboradores, bytes,
+        registro, colaboradores, bytes, osBase, revisaoInicial,
       });
     }
     // Serve as 7 PTs: o que muda entre elas é só o prefixo do arquivo.
-    function enviarPTDoc(tipo, registro, colaboradores, bytes, osNome){
+    function enviarPTDoc(tipo, registro, colaboradores, bytes, osNome, osBase, revisaoInicial){
       return enviarDocumento({
         tabela:"pt", tabelaColab:"pt_colaborador", chaveColab:"pt_id",
         caminhoPdf:"pt/PT_"+tipo+"_"+(osNome||"sem_os")+"_"+Date.now()+".pdf",
-        registro, colaboradores, bytes,
+        registro, colaboradores, bytes, osBase, revisaoInicial,
       });
     }
 
-    // Recalcula o sufixo Rev.NN na hora do envio (mesma OS, no mesmo dia).
-    // Offline não dá para consultar, então o número base vai na fila e a revisão
-    // só é resolvida aqui.
-    async function calcularRevisao(item){
-      if(!item.osBase || !item.dataAtividade) return item.registro;
+    // Sugere por qual revisão COMEÇAR a tentar (mesma OS, no mesmo dia).
+    // É só um palpite para acertar de primeira no caso comum: quem decide de verdade é o
+    // índice único do banco, dentro de enviarDocumento(). Se esta consulta falhar ou vier
+    // desatualizada, o pior que acontece é uma tentativa a mais.
+    async function sugerirRevisao(osBase, dataAtividade, doc, tipo){
+      if(!osBase || !dataAtividade) return 0;
       try{
-        let q = supa.from(item.doc==="pt" ? "pt" : "dts").select("id")
-          .eq("numero_os_base", item.osBase).eq("data_atividade", item.dataAtividade);
-        if(item.doc==="pt" && item.tipo) q = q.eq("tipo", item.tipo);
-        const { data:ex } = await q;
-        const n = (ex||[]).length;
-        const osEf = n>0 ? item.osBase+" Rev."+String(n).padStart(2,"0") : item.osBase;
-        return {...item.registro, numero_os:osEf, numero_os_base:item.osBase};
-      }catch(_){ return item.registro; }
+        let q = supa.from(doc==="pt" ? "pt" : "dts").select("revisao")
+          .eq("numero_os_base", osBase).eq("data_atividade", dataAtividade);
+        if(doc==="pt" && tipo) q = q.eq("tipo", tipo);
+        const { data } = await q;
+        if(!data || !data.length) return 0;
+        // documentos gravados antes da V38 têm revisao nula: contam como ocupando a base
+        const maior = data.reduce((m,r)=> Math.max(m, Number.isInteger(r.revisao) ? r.revisao : 0), -1);
+        return maior + 1;
+      }catch(_){ return 0; }
     }
 
     // Esvazia a fila de pendentes (DTS e PT). Item que falha PERMANECE na fila e a
@@ -436,14 +483,15 @@
       let enviadas = 0;
       for(const item of fila){
         try{
-          const registro = await calcularRevisao(item);
+          const rev = await sugerirRevisao(item.osBase, item.dataAtividade, item.doc, item.tipo);
           // item antigo, gravado antes da fila aceitar PT, não tem 'doc': é DTS
           const res = (item.doc==="pt")
-            ? await enviarPTDoc(item.tipo, registro, item.colaboradores, item.bytes, item.osNome)
-            : await enviarDTSDoc(registro, item.colaboradores, item.bytes, item.osNome);
+            ? await enviarPTDoc(item.tipo, item.registro, item.colaboradores, item.bytes, item.osNome, item.osBase, rev)
+            : await enviarDTSDoc(item.registro, item.colaboradores, item.bytes, item.osNome, item.osBase, rev);
           // carimba o pdf_path na cópia local, senão o QR code não funciona depois
+          // (se jaExistia, o documento já está no servidor: só saímos da fila)
           try{ const locais=await listarLocal(); const loc=locais.find(l=>l.id===item.id);
-            if(loc){ loc.pdf_path=res.pdf_path; await salvarLocal(loc); } }catch(_){}
+            if(loc && !res.jaExistia){ loc.pdf_path=res.pdf_path; await salvarLocal(loc); } }catch(_){}
           await filaRemover(item.id);
           enviadas++;
         }catch(e){ /* mantém na fila para a próxima tentativa */ }
@@ -746,11 +794,6 @@
         };
       }
 
-      // O envio vive em enviarDTSDoc(), no nível do módulo, para que a fila possa
-      // reenviar a DTS mesmo com esta tela fechada.
-      async function enviarRegistroCompleto(registro, colaboradores, bytes, osNome){
-        return enviarDTSDoc(registro, colaboradores, bytes, osNome);
-      }
       async function gerarPDF(osEfetiva){
         const osMostrar = osEfetiva || numeroOs;
         const { PDFDocument, rgb, StandardFonts } = PDFLib;
@@ -953,23 +996,21 @@
           const hoje=diaLocal(agora.current);
           const osBase=numeroOs.trim();
 
-          // 1) detecta revisão: quantas DTS dessa OS já existem HOJE? (só dá p/ consultar online)
-          let osEfetiva=osBase;
+          // 1) por qual revisão começar? Só um palpite, e só dá para consultar online.
+          //    Quem decide de verdade é o índice único do banco, no momento do insert.
           let online=navigator.onLine;
-          if(online){
-            try{
-              const { data:existentes }=await supa.from("dts").select("id").eq("numero_os_base",osBase).eq("data_atividade",hoje);
-              const n=(existentes||[]).length;
-              if(n>0) osEfetiva = osBase+" Rev."+String(n).padStart(2,"0");
-            }catch(e){ /* se a consulta falhar, segue sem rev */ }
-          }
+          const revisao = online ? await sugerirRevisao(osBase, hoje, "dts") : 0;
+          const osEfetiva = osComRevisao(osBase, revisao);
 
           // 2) gera o PDF com o número efetivo (com Rev se for o caso)
           const bytes=await gerarPDF(osEfetiva);
           if(!bytes){ setSalvando(false); return; }
 
           const localId="local_"+Date.now();
-          const registro={...montarRegistro(), numero_os:osEfetiva, numero_os_base:osBase};
+          // cliente_id nasce aqui e acompanha o documento até o fim, inclusive na fila:
+          // é ele que impede uma segunda cópia quando a resposta do envio se perde
+          const registro={...montarRegistro(), numero_os:osEfetiva, numero_os_base:osBase,
+            cliente_id:novoIdCliente()};
           const colaboradores=equipe.map(m=>m.nome);
           const osNome=osEfetiva.replace(/[^\w.-]+/g,"_")||"sem_os";
 
@@ -986,22 +1027,28 @@
           // o que garante o envio é a fila, não o rascunho.
           await rascunhoApagar("dts"); setRascunho(null);
 
-          // 4) envia agora; se offline ou falhar, enfileira (a revisão será recalculada ao sincronizar)
+          // 4) envia agora; se offline ou falhar, enfileira. O MESMO registro vai para a
+          //    fila, com o mesmo cliente_id — é isso que evita a duplicata na retentativa.
+          const enfileirar=async()=>{
+            await filaAdd({ id:localId, doc:"dts", registro, colaboradores,
+              osNome:osBase, bytes, osBase, dataAtividade:hoje });
+            setPendentes((await filaListar()).length);
+          };
+
           if(online){
             try{
-              const res=await enviarRegistroCompleto(registro, colaboradores, bytes, osNome);
+              const res=await enviarDTSDoc(registro, colaboradores, bytes, osNome, osBase, revisao);
               await salvarLocal({ id:localId, tipo:"dts", nome:"DTS_"+osNome+".pdf", data:fmtData(agora.current),
                 dataISO:new Date().toISOString(), atividade, bytes, dados, pdf_path:res.pdf_path });
               setRecentes(await listarDTSLocal());
-              mostraToast(osEfetiva!==osBase ? ("DTS enviada como "+osEfetiva+" (revisão).") : "DTS salva e enviada com sucesso!");
+              const nomeFinal = res.numero_os || osEfetiva;
+              mostraToast(nomeFinal!==osBase ? ("DTS enviada como "+nomeFinal+" (revisão).") : "DTS salva e enviada com sucesso!");
             }catch(e){
-              await filaAdd({ id:localId, doc:"dts", registro:{...registro,numero_os:osBase,numero_os_base:osBase}, colaboradores, osNome:osBase, bytes, osBase, dataAtividade:hoje });
-              setPendentes((await filaListar()).length);
+              await enfileirar();
               mostraToast("Sem conexão estável. DTS salva e será enviada quando reconectar.");
             }
           }else{
-            await filaAdd({ id:localId, doc:"dts", registro:{...registro,numero_os:osBase,numero_os_base:osBase}, colaboradores, osNome:osBase, bytes, osBase, dataAtividade:hoje });
-            setPendentes((await filaListar()).length);
+            await enfileirar();
             mostraToast("Offline: DTS salva. Será enviada automaticamente ao reconectar.");
           }
         }catch(e){ mostraToast("Erro: "+e.message,true); }
@@ -1745,12 +1792,13 @@
         setSalvando(true);
         try{
           const hoje=diaLocal(agora.current);
-          const osBase=numeroOs.trim(); let osEfetiva=osBase; const online=navigator.onLine;
-          if(online){ try{ const {data:ex}=await supa.from("pt").select("id").eq("tipo","quente").eq("numero_os_base",osBase).eq("data_atividade",hoje);
-            const n=(ex||[]).length; if(n>0) osEfetiva=osBase+" Rev."+String(n).padStart(2,"0"); }catch(_){} }
+          const osBase=numeroOs.trim(); const online=navigator.onLine;
+          const revisao = online ? await sugerirRevisao(osBase, hoje, "pt", "quente") : 0;
+          const osEfetiva = osComRevisao(osBase, revisao);
           const bytes=await gerarPDF(osEfetiva); if(!bytes){ setSalvando(false); return; }
           const localId="ptq_"+Date.now();
-          const registro={...montarRegistro(), numero_os:osEfetiva, numero_os_base:osBase};
+          const registro={...montarRegistro(), numero_os:osEfetiva, numero_os_base:osBase,
+            cliente_id:novoIdCliente()};
           const colaboradores=equipe.map(m=>m.nome);
           const osNome=osEfetiva.replace(/[^\w.-]+/g,"_")||"sem_os";
           const baseItem={ id:localId, tipo:"pt_quente", nome:"PT_quente_"+osNome+".pdf", data:fmtData(agora.current),
@@ -1764,14 +1812,13 @@
           // ficava só no aparelho e era apagada na limpeza do dia seguinte, sem nunca
           // ter chegado ao servidor.
           const enfileirar=async()=>{
-            await filaAdd({ id:localId, doc:"pt", tipo:"quente",
-              registro:{...registro, numero_os:osBase, numero_os_base:osBase},
+            await filaAdd({ id:localId, doc:"pt", tipo:"quente", registro,
               colaboradores, osNome:osBase, bytes, osBase, dataAtividade:hoje });
           };
 
           if(online){
             try{
-              const res=await enviarPTDoc("quente", registro, colaboradores, bytes, osNome);
+              const res=await enviarPTDoc("quente", registro, colaboradores, bytes, osNome, osBase, revisao);
               if(res && res.pdf_path){
                 await salvarLocal({...baseItem, pdf_path:res.pdf_path});
                 setRecentes((await listarLocal()).filter(r=>r.tipo==="pt_quente"));
@@ -2532,11 +2579,11 @@ altura: {
         setSalvando(true);
         try{
           const hoje=diaLocal(agora.current);
-          const osBase=numeroOs.trim(); let osEfetiva=osBase; const online=navigator.onLine;
-          if(online){ try{ const {data:ex}=await supa.from("pt").select("id").eq("tipo",desc.tipo).eq("numero_os_base",osBase).eq("data_atividade",hoje);
-            const n=(ex||[]).length; if(n>0) osEfetiva=osBase+" Rev."+String(n).padStart(2,"0"); }catch(_){} }
+          const osBase=numeroOs.trim(); const online=navigator.onLine;
+          const revisao = online ? await sugerirRevisao(osBase, hoje, "pt", desc.tipo) : 0;
+          const osEfetiva = osComRevisao(osBase, revisao);
           const bytes=await gerarPDF(osEfetiva); if(!bytes){ setSalvando(false); return; }
-          const registro=montarRegistro(osEfetiva,osBase);
+          const registro={...montarRegistro(osEfetiva,osBase), cliente_id:novoIdCliente()};
           const colaboradores=equipe.map(m=>m.nome);
           const osNome=(osEfetiva||"sem_os").replace(/[^\w.-]+/g,"_");
           const localId="pt_"+desc.tipo+"_"+Date.now();
@@ -2551,14 +2598,13 @@ altura: {
           // ficava só no aparelho e era apagada na limpeza do dia seguinte, sem nunca
           // ter chegado ao servidor.
           const enfileirar=async()=>{
-            await filaAdd({ id:localId, doc:"pt", tipo:desc.tipo,
-              registro:{...registro, numero_os:osBase, numero_os_base:osBase},
+            await filaAdd({ id:localId, doc:"pt", tipo:desc.tipo, registro,
               colaboradores, osNome:osBase, bytes, osBase, dataAtividade:hoje });
           };
 
           if(online){
             try{
-              const res=await enviarPTDoc(desc.tipo, registro, colaboradores, bytes, osNome);
+              const res=await enviarPTDoc(desc.tipo, registro, colaboradores, bytes, osNome, osBase, revisao);
               if(res && res.pdf_path){ await salvarLocal({...baseItem, pdf_path:res.pdf_path});
                 setRecentes((await listarLocal()).filter(r=>r.tipo===("pt_"+desc.tipo))); }
               mostraToast(osEfetiva!==osBase?("PT enviada como "+osEfetiva+"."):"PT salva e enviada!");
