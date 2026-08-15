@@ -65,10 +65,24 @@
 
   </script>
 
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Bibliotecas com VERSÃO FIXA. Antes, react@18 e supabase-js@2 eram faixas abertas:
+       qualquer release nova entrava sozinha no app em campo, sem teste e sem rollback.
+       Ao trocar de versão aqui, troque também o CACHE do sw.js.
+
+       SRI (integrity=) está calculado e pronto abaixo, mas NÃO ativado: se um hash não
+       bater, o navegador recusa o script e o app abre em branco — falha total, e não dá
+       para testar isto sem rodar o app localmente. Ative junto com crossorigin="anonymous"
+       em todas as tags, depois de validar em http://localhost:8000.
+         react 18.3.1        sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z
+         react-dom 18.3.1    sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1
+         babel 7.25.6        sha384-EIcs2MbARRLcLs7Gv2wqqhhfMlcLeW9yuJsWki1r5iveN1F5gpzHOwAKycJqSQOI
+         supabase-js 2.112.3 sha384-l8ah+VgaWtk1mvOe9VC+OirC6qHFF4yH7l7mKRidV9MSti3E9F463bMp6ZVN4kuC
+         pdf-lib 1.17.1      sha384-weMABwrltA6jWR8DDe9Jp5blk+tZQh7ugpCsF3JwSA53WZM9/14PjS5LAJNHNjAI
+         qrcodejs 1.0.0      sha384-3zSEDfvllQohrq0PHL1fOXJuC/jSOO34H46t6UQfobFOmxE5BpjjaIJY5F2/bMnU -->
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.3"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
@@ -139,7 +153,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V35";
+    const APP_VERSION = "V36";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://pxcrbgpycoifibrewqsx.supabase.co";
@@ -215,13 +229,14 @@
     function fmtData(d){ const dd=String(d.getDate()).padStart(2,"0"), mm=String(d.getMonth()+1).padStart(2,"0"); return dd+"/"+mm+"/"+d.getFullYear(); }
 
     // ===== Armazenamento local (IndexedDB) das DTS recentes no aparelho =====
-    const DB_NOME="dts_local", STORE="recentes", FILA="pendentes";
+    const DB_NOME="dts_local", STORE="recentes", FILA="pendentes", RASC="rascunhos";
     function abrirDB(){
       return new Promise((res,rej)=>{
-        const req=indexedDB.open(DB_NOME,2);
+        const req=indexedDB.open(DB_NOME,3);
         req.onupgradeneeded=()=>{ const db=req.result;
           if(!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE,{keyPath:"id"});
           if(!db.objectStoreNames.contains(FILA)) db.createObjectStore(FILA,{keyPath:"id"});
+          if(!db.objectStoreNames.contains(RASC)) db.createObjectStore(RASC,{keyPath:"chave"});
         };
         req.onsuccess=()=>res(req.result); req.onerror=()=>rej(req.error);
       });
@@ -262,6 +277,72 @@
     }
     async function filaRemover(id){
       try{ const db=await abrirDB(); const tx=db.transaction(FILA,"readwrite"); tx.objectStore(FILA).delete(id); return new Promise(r=>{tx.oncomplete=()=>r(true);tx.onerror=()=>r(false);}); }catch(e){ return false; }
+    }
+
+    // ===== RASCUNHO do formulário em preenchimento =====
+    // Uma DTS com equipe, riscos e rubricas leva bastante tempo para preencher, e até aqui
+    // nada era gravado antes de finalizar: uma ligação recebida, o Android descartando a
+    // aba por memória ou um toque no voltar levavam tudo junto. Agora o formulário é
+    // gravado sozinho enquanto é preenchido.
+    //
+    // Tudo aqui é best-effort e silencioso de propósito: se o rascunho falhar, o
+    // formulário tem que continuar funcionando exatamente como antes.
+    async function rascunhoSalvar(chave, dados){
+      try{ const db=await abrirDB(); const tx=db.transaction(RASC,"readwrite");
+        tx.objectStore(RASC).put({ chave, dados, em:new Date().toISOString() });
+        return new Promise(r=>{tx.oncomplete=()=>r(true);tx.onerror=()=>r(false);});
+      }catch(e){ return false; }
+    }
+    async function rascunhoLer(chave){
+      try{ const db=await abrirDB(); const tx=db.transaction(RASC,"readonly");
+        const req=tx.objectStore(RASC).get(chave);
+        return new Promise(r=>{ req.onsuccess=()=>r(req.result||null); req.onerror=()=>r(null); });
+      }catch(e){ return null; }
+    }
+    async function rascunhoApagar(chave){
+      try{ const db=await abrirDB(); const tx=db.transaction(RASC,"readwrite");
+        tx.objectStore(RASC).delete(chave);
+        return new Promise(r=>{tx.oncomplete=()=>r(true);tx.onerror=()=>r(false);});
+      }catch(e){ return false; }
+    }
+
+    // Grava o formulário a cada mudança (com atraso, para não escrever a cada tecla) e
+    // devolve o rascunho encontrado ao abrir a tela. NUNCA aplica sozinho: quem decide
+    // restaurar é o operador, senão um rascunho velho sequestraria um formulário novo.
+    function useRascunho(chave, instantaneo, deps){
+      const [achado,setAchado]=useState(null);
+      const montando=useRef(true);
+      useEffect(()=>{ let vivo=true;
+        (async()=>{ const r=await rascunhoLer(chave); if(vivo && r && r.dados) setAchado(r); })();
+        return ()=>{ vivo=false; };
+      },[]);
+      useEffect(()=>{
+        if(montando.current){ montando.current=false; return; }   // não grava só por abrir a tela
+        const t=setTimeout(()=>{ try{ rascunhoSalvar(chave, instantaneo()); }catch(_){} }, 1200);
+        return ()=>clearTimeout(t);
+      }, deps);
+      return [achado, setAchado];
+    }
+
+    // Faixa que oferece o rascunho. Fica no topo do formulário.
+    function FaixaRascunho({ rascunho, onRestaurar, onDescartar }){
+      if(!rascunho) return null;
+      let quando="";
+      try{ const d=new Date(rascunho.em);
+        quando=fmtData(d)+" às "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
+      }catch(_){}
+      return (
+        <div style={{background:"#FFF6E5",border:"1px solid #E7C77A",borderRadius:10,padding:"12px 14px",margin:"12px 16px 0"}}>
+          <div style={{fontSize:13.5,color:"#7A5510",lineHeight:1.45,marginBottom:10}}>
+            <b>Há um preenchimento não finalizado</b>{quando?" de "+quando:""}.<br/>
+            As rubricas não são restauradas — cada trabalhador rubrica de novo.
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button className="btn btn-blue" style={{fontSize:13,padding:"8px 14px"}} onClick={onRestaurar}>Restaurar</button>
+            <button className="btn btn-light" style={{fontSize:13,padding:"8px 14px"}} onClick={onDescartar}>Descartar</button>
+          </div>
+        </div>
+      );
     }
 
     // ===== Envio ao Supabase =====
@@ -531,6 +612,17 @@
         };
       },[]);
 
+      // ---- Rascunho: grava o preenchimento em curso ----
+      // As rubricas ficam de fora: são assinatura, e a regra da casa é que cada
+      // trabalhador rubrique de novo (o mesmo já vale para "Duplicar").
+      const instantaneo=()=>({ numeroOs, elaborador, lider, area, atividade, local,
+        tipoEquipe, empresa, empresaOutra, criticas, etapasSel, riscoSel,
+        etapasOutras, riscosManuais, epis, outros,
+        equipe: equipe.map(m=>({nome:m.nome})) });
+      const [rascunho,setRascunho]=useRascunho("dts", instantaneo,
+        [numeroOs,elaborador,lider,area,atividade,local,tipoEquipe,empresa,empresaOutra,
+         criticas,etapasSel,riscoSel,etapasOutras,riscosManuais,epis,outros,equipe]);
+
       const baixarRecente=(item)=>{
         try{ const blob=new Blob([item.bytes],{type:"application/pdf"}); const url=URL.createObjectURL(blob);
           const a=document.createElement("a"); a.href=url; a.download=item.nome;
@@ -556,9 +648,9 @@
         }catch(e){ mostraToast("Erro ao gerar QR: "+e.message,true); }
       }
 
-      const duplicar=(item)=>{
-        const d=item.dados;
-        if(!d){ mostraToast("Esta DTS não pode ser duplicada (sem dados salvos).",true); return; }
+      // Joga um conjunto de dados salvos de volta no formulário. Usado pelo "Duplicar" e
+      // pela restauração de rascunho.
+      const aplicarDados=(d)=>{
         setNumeroOs(d.numeroOs||""); setElaborador(d.elaborador||""); setLider(d.lider||"");
         setArea(d.area||""); setAtividade(d.atividade||""); setLocal(d.local||"");
         setTipoEquipe(d.tipoEquipe||"contratada"); setEmpresa(d.empresa||"Grupo Solution"); setEmpresaOutra(d.empresaOutra||"");
@@ -568,6 +660,12 @@
         // equipe volta com os nomes, mas SEM rubrica (cada um precisa rubricar de novo)
         setEquipe((d.equipe||[]).map(m=>({nome:m.nome, rubrica:null})));
         window.scrollTo(0,0);
+      };
+
+      const duplicar=(item)=>{
+        const d=item.dados;
+        if(!d){ mostraToast("Esta DTS não pode ser duplicada (sem dados salvos).",true); return; }
+        aplicarDados(d);
         mostraToast("DTS duplicada! Revise os dados e colha as rubricas novamente.");
       };
 
@@ -885,6 +983,10 @@
             dataISO:new Date().toISOString(), atividade, bytes, dados });
           setRecentes(await listarDTSLocal());
 
+          // O documento existe: o rascunho cumpriu o papel e sai de cena. A partir daqui
+          // o que garante o envio é a fila, não o rascunho.
+          await rascunhoApagar("dts"); setRascunho(null);
+
           // 4) envia agora; se offline ou falhar, enfileira (a revisão será recalculada ao sincronizar)
           if(online){
             try{
@@ -915,6 +1017,10 @@
           <p className="meta-now">Emitida em {fmtData(agora.current)} às {fmtHora(agora.current)} (automático)</p>
           {pendentes>0 && <p className="meta-now" style={{color:"#FFD27A"}}>⏳ {pendentes} DTS aguardando envio (será enviada ao reconectar)</p>}
         </div>
+
+        <FaixaRascunho rascunho={rascunho}
+          onRestaurar={()=>{ aplicarDados(rascunho.dados); setRascunho(null); mostraToast("Preenchimento restaurado. Colha as rubricas novamente."); }}
+          onDescartar={()=>{ rascunhoApagar("dts"); setRascunho(null); }} />
 
         {recentes.length>0 && (
           <div className="section" style={{background:"#f0f6fc"}}>
@@ -2960,13 +3066,19 @@ altura: {
       // ---- Botão VOLTAR do Android ----
       // Sem isso, o voltar do celular fecha o app. Aqui ele recua uma tela por vez:
       // cada avanço empilha uma entrada no histórico e o voltar desempilha.
-      const PAI_TELA={
+      // Só as telas cujo pai NÃO dá para deduzir pelo nome ficam listadas aqui.
+      const PAI_FIXO={
         dts_hub:"inicio", dts:"dts_hub", dts_adm:"dts_hub",
         pt_hub:"inicio", pt_menu:"pt_hub", pt_adm:"pt_hub",
-        pt_quente:"pt_menu", pt_eletricidade:"pt_menu", pt_altura:"pt_menu",
-        pt_escavacao:"pt_menu", pt_confinado:"pt_menu", pt_mergulho:"pt_menu",
-        pt_icamento:"pt_menu"
       };
+      // Qualquer tela "pt_<tipo>" volta para o menu de PTs sem precisar ser registrada.
+      // Antes, cada uma das 7 PTs estava no mapa à mão: esquecer de registrar uma PT nova
+      // fazia o voltar pular direto para o início, no meio do preenchimento.
+      function paiDaTela(tela){
+        if(PAI_FIXO[tela]) return PAI_FIXO[tela];
+        if(/^pt_/.test(tela)) return "pt_menu";
+        return "inicio";
+      }
       const voltandoRef=React.useRef(false);
       useEffect(()=>{
         // se a mudança veio do próprio voltar, não empilha de novo
@@ -2977,7 +3089,7 @@ altura: {
         const aoVoltar=()=>{
           voltandoRef.current=true;
           if(qrApp){ setQrApp(false); return; }       // fecha o QR primeiro
-          if(modo!=="inicio"){ setModo(PAI_TELA[modo]||"inicio"); return; }
+          if(modo!=="inicio"){ setModo(paiDaTela(modo)); return; }
           voltandoRef.current=false;                   // já no início: deixa sair do app
         };
         window.addEventListener("popstate",aoVoltar);
