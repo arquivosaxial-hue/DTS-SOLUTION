@@ -139,7 +139,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V34";
+    const APP_VERSION = "V35";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://pxcrbgpycoifibrewqsx.supabase.co";
@@ -239,9 +239,17 @@
       return todos.filter(r => r.tipo==="dts" || (!r.tipo && (r.nome||"").startsWith("DTS")));
     }
     async function limparAntigas(){ // remove o que não é de hoje
-      try{ const hoje=diaLocal(); const db=await abrirDB();
+      try{ const hoje=diaLocal();
+        // NUNCA apaga o que ainda está na fila: esse documento não chegou ao servidor,
+        // e a cópia local é a única que existe. Sem esta guarda, uma PT preenchida sem
+        // sinal sumia do aparelho no dia seguinte.
+        const pendentes=new Set((await filaListar()).map(f=>f.id));
+        const db=await abrirDB();
         const tx=db.transaction(STORE,"readwrite"); const st=tx.objectStore(STORE); const req=st.getAll();
-        req.onsuccess=()=>{ (req.result||[]).forEach(it=>{ if((it.dataISO||"").slice(0,10)!==hoje) st.delete(it.id); }); };
+        req.onsuccess=()=>{ (req.result||[]).forEach(it=>{
+          if(pendentes.has(it.id)) return;
+          if((it.dataISO||"").slice(0,10)!==hoje) st.delete(it.id);
+        }); };
       }catch(e){}
     }
     // --- FILA de envio (DTS pendentes de sincronização) ---
@@ -255,6 +263,116 @@
     async function filaRemover(id){
       try{ const db=await abrirDB(); const tx=db.transaction(FILA,"readwrite"); tx.objectStore(FILA).delete(id); return new Promise(r=>{tx.oncomplete=()=>r(true);tx.onerror=()=>r(false);}); }catch(e){ return false; }
     }
+
+    // ===== Envio ao Supabase =====
+    // Estas funções ficam no nível do módulo (fora dos componentes) de propósito:
+    // assim a fila pode ser esvaziada de QUALQUER tela, e não só de dentro do
+    // formulário de DTS como era antes.
+
+    // Sobe o PDF primeiro e só então insere o registro. Se o insert falhar, o PDF é
+    // removido do Storage. Se os COLABORADORES falharem, o documento também é desfeito:
+    // uma DTS/PT sem a equipe que participou não é um documento válido, e deixá-la no
+    // banco faria a retentativa da fila criar uma segunda cópia completa.
+    async function enviarDocumento({ tabela, tabelaColab, chaveColab, caminhoPdf, registro, colaboradores, bytes }){
+      const { error:eUp } = await supa.storage.from("dts-pdfs")
+        .upload(caminhoPdf, new Blob([bytes],{type:"application/pdf"}), { upsert:true, contentType:"application/pdf" });
+      if(eUp) throw eUp; // sem PDF garantido, não insere o registro
+
+      const { data:ins, error } = await supa.from(tabela).insert({...registro, pdf_path:caminhoPdf}).select().single();
+      if(error){
+        try{ await supa.storage.from("dts-pdfs").remove([caminhoPdf]); }catch(_){}
+        throw error;
+      }
+
+      if(colaboradores && colaboradores.length){
+        const rows = colaboradores.map((nome,i)=>({ [chaveColab]:ins.id, nome, ordem:i }));
+        const { error:eColab } = await supa.from(tabelaColab).insert(rows);
+        if(eColab){
+          try{ await supa.from(tabela).delete().eq("id", ins.id); }catch(_){}
+          try{ await supa.storage.from("dts-pdfs").remove([caminhoPdf]); }catch(_){}
+          throw eColab;
+        }
+      }
+      return { id: ins.id, pdf_path: caminhoPdf };
+    }
+
+    function enviarDTSDoc(registro, colaboradores, bytes, osNome){
+      return enviarDocumento({
+        tabela:"dts", tabelaColab:"dts_colaborador", chaveColab:"dts_id",
+        caminhoPdf:"DTS_"+(osNome||"sem_os")+"_"+Date.now()+".pdf",
+        registro, colaboradores, bytes,
+      });
+    }
+    // Serve as 7 PTs: o que muda entre elas é só o prefixo do arquivo.
+    function enviarPTDoc(tipo, registro, colaboradores, bytes, osNome){
+      return enviarDocumento({
+        tabela:"pt", tabelaColab:"pt_colaborador", chaveColab:"pt_id",
+        caminhoPdf:"pt/PT_"+tipo+"_"+(osNome||"sem_os")+"_"+Date.now()+".pdf",
+        registro, colaboradores, bytes,
+      });
+    }
+
+    // Recalcula o sufixo Rev.NN na hora do envio (mesma OS, no mesmo dia).
+    // Offline não dá para consultar, então o número base vai na fila e a revisão
+    // só é resolvida aqui.
+    async function calcularRevisao(item){
+      if(!item.osBase || !item.dataAtividade) return item.registro;
+      try{
+        let q = supa.from(item.doc==="pt" ? "pt" : "dts").select("id")
+          .eq("numero_os_base", item.osBase).eq("data_atividade", item.dataAtividade);
+        if(item.doc==="pt" && item.tipo) q = q.eq("tipo", item.tipo);
+        const { data:ex } = await q;
+        const n = (ex||[]).length;
+        const osEf = n>0 ? item.osBase+" Rev."+String(n).padStart(2,"0") : item.osBase;
+        return {...item.registro, numero_os:osEf, numero_os_base:item.osBase};
+      }catch(_){ return item.registro; }
+    }
+
+    // Esvazia a fila de pendentes (DTS e PT). Item que falha PERMANECE na fila e a
+    // função segue para o próximo — um registro problemático não pode bloquear
+    // todos os que vieram depois.
+    //
+    // A trava __sincronizando é obrigatória: o Root e a tela de DTS escutam o evento
+    // "online" ao mesmo tempo. Sem ela, as duas percorreriam a MESMA fila em paralelo
+    // e o mesmo documento seria inserido duas vezes no banco.
+    let __sincronizando = false;
+    async function sincronizarTudo(){
+      if(__sincronizando) return { enviadas:0, restantes:(await filaListar()).length };
+      if(!navigator.onLine) return { enviadas:0, restantes:(await filaListar()).length };
+      __sincronizando = true;
+      try{
+        return await __sincronizarFila();
+      } finally {
+        __sincronizando = false;
+      }
+    }
+
+    async function __sincronizarFila(){
+      const fila = await filaListar();
+      if(!fila.length){
+        try{ window.dispatchEvent(new CustomEvent("fila-mudou",{detail:{enviadas:0,restantes:0}})); }catch(_){}
+        return { enviadas:0, restantes:0 };
+      }
+      let enviadas = 0;
+      for(const item of fila){
+        try{
+          const registro = await calcularRevisao(item);
+          // item antigo, gravado antes da fila aceitar PT, não tem 'doc': é DTS
+          const res = (item.doc==="pt")
+            ? await enviarPTDoc(item.tipo, registro, item.colaboradores, item.bytes, item.osNome)
+            : await enviarDTSDoc(registro, item.colaboradores, item.bytes, item.osNome);
+          // carimba o pdf_path na cópia local, senão o QR code não funciona depois
+          try{ const locais=await listarLocal(); const loc=locais.find(l=>l.id===item.id);
+            if(loc){ loc.pdf_path=res.pdf_path; await salvarLocal(loc); } }catch(_){}
+          await filaRemover(item.id);
+          enviadas++;
+        }catch(e){ /* mantém na fila para a próxima tentativa */ }
+      }
+      const restantes = (await filaListar()).length;
+      try{ window.dispatchEvent(new CustomEvent("fila-mudou",{detail:{enviadas,restantes}})); }catch(_){}
+      return { enviadas, restantes };
+    }
+
     function fmtHora(d){ return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"); }
 
     function PillGroup({ options, selected, onToggle }) {
@@ -389,42 +507,28 @@
       const [recentes,setRecentes]=useState([]);
       const [pendentes,setPendentes]=useState(0);
 
-      // sincroniza a fila de pendentes com o Supabase
+      // A fila é esvaziada por sincronizarTudo(), no nível do módulo — inclusive
+      // enquanto esta tela está fechada. Aqui só refletimos o resultado na interface.
       async function sincronizarPendentes(){
-        if(!navigator.onLine) return;
-        const fila=await filaListar();
-        if(!fila.length){ setPendentes(0); return; }
-        let enviadas=0;
-        for(const item of fila){
-          try{
-            // recalcula revisão no momento do envio (mesma OS no mesmo dia)
-            let registro=item.registro;
-            if(item.osBase && item.dataAtividade){
-              try{
-                const { data:ex }=await supa.from("dts").select("id").eq("numero_os_base",item.osBase).eq("data_atividade",item.dataAtividade);
-                const n=(ex||[]).length;
-                const osEf = n>0 ? item.osBase+" Rev."+String(n).padStart(2,"0") : item.osBase;
-                registro={...item.registro, numero_os:osEf, numero_os_base:item.osBase};
-              }catch(_){}
-            }
-            const res=await enviarRegistroCompleto(registro, item.colaboradores, item.bytes, item.osNome);
-            try{ const locais=await listarLocal(); const loc=locais.find(l=>l.id===item.id);
-              if(loc){ loc.pdf_path=res.pdf_path; await salvarLocal(loc); } }catch(_){}
-            await filaRemover(item.id);
-            enviadas++;
-          }catch(e){ /* mantém na fila para a próxima tentativa */ }
+        const { enviadas } = await sincronizarTudo();
+        if(enviadas>0){
+          setRecentes(await listarDTSLocal());
+          mostraToast(enviadas+" documento(s) pendente(s) enviado(s) ao administrador.");
         }
-        if(enviadas>0) setRecentes(await listarDTSLocal());
-        const resto=(await filaListar()).length;
-        setPendentes(resto);
-        if(enviadas>0) mostraToast(enviadas+" DTS pendente(s) enviada(s) ao administrador.");
+        setPendentes((await filaListar()).length);
       }
 
       useEffect(()=>{
         (async()=>{ await limparAntigas(); setRecentes(await listarDTSLocal()); setPendentes((await filaListar()).length); await sincronizarPendentes(); })();
         const aoReconectar=()=> sincronizarPendentes();
+        // o Root também sincroniza; este listener mantém o contador desta tela em dia
+        const aoMudarFila=(e)=> setPendentes((e.detail && e.detail.restantes) || 0);
         window.addEventListener("online", aoReconectar);
-        return ()=> window.removeEventListener("online", aoReconectar);
+        window.addEventListener("fila-mudou", aoMudarFila);
+        return ()=>{
+          window.removeEventListener("online", aoReconectar);
+          window.removeEventListener("fila-mudou", aoMudarFila);
+        };
       },[]);
 
       const baixarRecente=(item)=>{
@@ -516,6 +620,13 @@
         return linhas;
       };
 
+      // REGRA DE SEGURANÇA: risco de nível Alto precisa de barreira de CONTROLE
+      // (eliminação ou engenharia). Alto tratado só com EPI (Proteção) ou só com
+      // treinamento (Suporte) é uma DTS inválida na prática — Controle atua na fonte,
+      // os outros dois não.
+      const semBarreiraControle=(l)=> l.nivel==="A" && !String(l.ctrl||"").trim();
+      const riscosAltoSemControle=(linhas)=> linhas.filter(semBarreiraControle);
+
       // monta o objeto do registro da DTS (sem enviar)
       function montarRegistro(){
         const linhas=montarLinhas();
@@ -526,7 +637,10 @@
           elaborador, lider_frente:lider, area_setor:area, atividade, localizacao:local,
           tipo_equipe:tipoEquipe, empresa:empresaEfetiva,
           atividades_criticas:criticas,
-          riscos: linhas.map(l=>({passo:l.passo,nome:l.risco,nivel:l.nivel,controle:l.ctrl,protecao:l.prot,suporte:l.sup})),
+          // O marcador vai DENTRO de 'riscos' (jsonb que já existe) de propósito: assim o
+          // aprovador enxerga o alerta sem precisar de coluna nova no banco.
+          riscos: linhas.map(l=>({passo:l.passo,nome:l.risco,nivel:l.nivel,controle:l.ctrl,protecao:l.prot,suporte:l.sup,
+            ...(semBarreiraControle(l) ? {alerta_sem_controle:true} : {})})),
           epis,
           barreiras_controle: linhas.map(l=>l.ctrl).filter(Boolean),
           barreiras_protecao: linhas.map(l=>l.prot).filter(Boolean),
@@ -535,28 +649,11 @@
         };
       }
 
-      // envia um registro + colaboradores + PDF ao Supabase. Retorna o id ou lança erro.
+      // O envio vive em enviarDTSDoc(), no nível do módulo, para que a fila possa
+      // reenviar a DTS mesmo com esta tela fechada.
       async function enviarRegistroCompleto(registro, colaboradores, bytes, osNome){
-        // 1) sobe o PDF PRIMEIRO. Se falhar, lança erro e a DTS vai para a fila (não entra incompleta).
-        const nome = "DTS_"+(osNome||"sem_os")+"_"+Date.now()+".pdf";
-        const { error:e3 } = await supa.storage.from("dts-pdfs").upload(nome, new Blob([bytes],{type:"application/pdf"}), { upsert:true, contentType:"application/pdf" });
-        if(e3) throw e3; // sem PDF garantido, não insere o registro
-        // 2) insere o registro JÁ com o pdf_path
-        const { data:ins, error } = await supa.from("dts").insert({...registro, pdf_path:nome}).select().single();
-        if(error){
-          // registro falhou: remove o PDF órfão do Storage para não acumular lixo
-          try{ await supa.storage.from("dts-pdfs").remove([nome]); }catch(_){}
-          throw error;
-        }
-        // 3) colaboradores
-        if(colaboradores && colaboradores.length){
-          const rows=colaboradores.map((nome,i)=>({dts_id:ins.id,nome,ordem:i}));
-          const { error:e2 } = await supa.from("dts_colaborador").insert(rows);
-          if(e2) throw e2;
-        }
-        return { id: ins.id, pdf_path: nome };
+        return enviarDTSDoc(registro, colaboradores, bytes, osNome);
       }
-
       async function gerarPDF(osEfetiva){
         const osMostrar = osEfetiva || numeroOs;
         const { PDFDocument, rgb, StandardFonts } = PDFLib;
@@ -737,6 +834,23 @@
         const semBarreira=linhasV.filter(l=> l.risco && !l.ctrl && !l.prot && !l.sup).map(l=>l.risco);
         if(semBarreira.length){ mostraToast("Risco sem barreira: "+semBarreira.join("; ")+". Defina ao menos uma barreira.",true); return; }
 
+        // Risco ALTO sem barreira de Controle: alerta, mas NÃO bloqueia.
+        // Bloquear seria pior: o operador pode estar sem sinal, com a frente parada,
+        // precisando do documento agora. Então exigimos confirmação consciente e
+        // marcamos a DTS para o aprovador.
+        const altoSemControle=riscosAltoSemControle(linhasV);
+        if(altoSemControle.length){
+          const nomes=altoSemControle.map(l=>"• "+(l.risco||l.passo||"(risco sem nome)")).join("\n");
+          const seguir=window.confirm(
+            "ATENÇÃO — risco de nível ALTO sem barreira de Controle:\n\n"+nomes+"\n\n"+
+            "Controle é a barreira que elimina o risco na fonte (isolamento, escoramento da "+
+            "vala, sondagem prévia, planejamento de rota). EPI e treinamento NÃO substituem.\n\n"+
+            "Cancele para voltar e definir uma barreira de Controle, ou confirme para "+
+            "registrar assim mesmo — a DTS será marcada para o aprovador."
+          );
+          if(!seguir) return;
+        }
+
         setSalvando(true);
         try{
           const hoje=diaLocal(agora.current);
@@ -780,12 +894,12 @@
               setRecentes(await listarDTSLocal());
               mostraToast(osEfetiva!==osBase ? ("DTS enviada como "+osEfetiva+" (revisão).") : "DTS salva e enviada com sucesso!");
             }catch(e){
-              await filaAdd({ id:localId, registro:{...registro,numero_os:osBase,numero_os_base:osBase}, colaboradores, osNome:osBase, bytes, osBase, dataAtividade:hoje });
+              await filaAdd({ id:localId, doc:"dts", registro:{...registro,numero_os:osBase,numero_os_base:osBase}, colaboradores, osNome:osBase, bytes, osBase, dataAtividade:hoje });
               setPendentes((await filaListar()).length);
               mostraToast("Sem conexão estável. DTS salva e será enviada quando reconectar.");
             }
           }else{
-            await filaAdd({ id:localId, registro:{...registro,numero_os:osBase,numero_os_base:osBase}, colaboradores, osNome:osBase, bytes, osBase, dataAtividade:hoje });
+            await filaAdd({ id:localId, doc:"dts", registro:{...registro,numero_os:osBase,numero_os_base:osBase}, colaboradores, osNome:osBase, bytes, osBase, dataAtividade:hoje });
             setPendentes((await filaListar()).length);
             mostraToast("Offline: DTS salva. Será enviada automaticamente ao reconectar.");
           }
@@ -1022,9 +1136,11 @@
     }
 
     // cfg define qual documento este painel administra. Padrão = DTS (comportamento original).
+    // 'riscos' entra no select só da DTS: é dele que sai o alerta de risco Alto sem
+    // barreira de Controle mostrado na listagem do aprovador.
     const CFG_DTS={ tabela:"dts", colab:"dts_colaborador", fk:"dts_id", rotulo:"DTS", prefixo:"DTS",
-      colTitulo:"atividade", colLocal:"localizacao", colLider:"lider_frente",
-      select:"id,created_at,numero_os,atividade,localizacao,lider_frente,pdf_path,data_atividade" };
+      colTitulo:"atividade", colLocal:"localizacao", colLider:"lider_frente", alertaRisco:true,
+      select:"id,created_at,numero_os,atividade,localizacao,lider_frente,pdf_path,data_atividade,riscos,excluido_em" };
     const CFG_PT_QUENTE={ tabela:"pt_quente", colab:"pt_quente_colaborador", fk:"pt_id", rotulo:"PT a Quente", prefixo:"PT_quente",
       colTitulo:"descricao_trabalho", colLocal:"local_trabalho", colLider:"lider_atividade",
       select:"id,created_at,numero_os,descricao_trabalho,local_trabalho,lider_atividade,pdf_path,data_atividade" };
@@ -1033,7 +1149,17 @@
     const CFG_PT={ tabela:"pt", colab:"pt_colaborador", fk:"pt_id", rotulo:"PT", prefixo:"PT",
       colTitulo:"descricao_trabalho", colLocal:"local_trabalho", colLider:"lider_atividade",
       filtroTipo:true, tipos:PT_TIPOS,
-      select:"id,created_at,tipo,numero_os,descricao_trabalho,local_trabalho,lider_atividade,pdf_path,data_atividade" };
+      select:"id,created_at,tipo,numero_os,descricao_trabalho,local_trabalho,lider_atividade,pdf_path,data_atividade,excluido_em" };
+
+    // Nomes dos riscos de nível Alto que ficaram sem barreira de Controle.
+    // Checa o marcador gravado a partir da V35 E recalcula pelo conteúdo — assim as DTS
+    // antigas, gravadas antes do alerta existir, também aparecem sinalizadas.
+    function alertasRiscoAlto(item){
+      const riscos = Array.isArray(item && item.riscos) ? item.riscos : [];
+      return riscos
+        .filter(r => r && (r.alerta_sem_controle === true || (r.nivel==="A" && !String(r.controle||"").trim())))
+        .map(r => r.nome || r.passo || "(risco sem nome)");
+    }
 
     function PainelAdm({ onVoltar, cfg=CFG_DTS }) {
       const [ok,setOk]=useState(false);
@@ -1045,14 +1171,17 @@
       const [carregando,setCarregando]=useState(false);
       const [prog,setProg]=useState(null);   // {feitos,total,restante} do "Baixar todos"
       const [msg,setMsg]=useState("");
+      const [verLixeira,setVerLixeira]=useState(false);
 
-      async function buscar(){
+      async function buscar(lixeira){
+        const naLixeira = (lixeira===undefined) ? verLixeira : lixeira;
         setCarregando(true); setMsg("");
         try{
           const montar=()=>{
-            let q=supa.from(cfg.tabela).select(cfg.select)
-                   .is("excluido_em",null)                 // esconde o que está na lixeira
-                   .order("created_at",{ascending:false});
+            let q=supa.from(cfg.tabela).select(cfg.select);
+            // a lixeira é o mesmo registro com excluido_em preenchido
+            q = naLixeira ? q.not("excluido_em","is",null) : q.is("excluido_em",null);
+            q = q.order("created_at",{ascending:false});
             if(de) q=q.gte("data_atividade",de);
             if(ate) q=q.lte("data_atividade",ate);
             if(cfg.filtroTipo && tipoFiltro) q=q.eq("tipo",tipoFiltro);
@@ -1060,8 +1189,24 @@
           };
           const data=await buscarTudo(montar);            // paginado: sem limite de 1000
           setLista(data||[]);
-          if(!data || !data.length) setMsg("Nenhum registro encontrado no período.");
+          if(!data || !data.length) setMsg(naLixeira ? "A lixeira está vazia no período." : "Nenhum registro encontrado no período.");
         }catch(e){ setMsg("Erro: "+e.message); }
+        finally{ setCarregando(false); }
+      }
+
+      // Tira o registro da lixeira. O PDF nunca foi apagado do Storage, então
+      // restaurar devolve o documento inteiro.
+      async function restaurar(item){
+        const desc=(item[cfg.colTitulo]||"(sem descrição)")+" — OS "+(item.numero_os||"-");
+        if(!window.confirm("Restaurar este registro?\n\n"+desc+"\n\nEle volta a aparecer nas listagens normais.")) return;
+        setCarregando(true); setMsg("");
+        try{
+          const { error }=await supa.from(cfg.tabela)
+            .update({ excluido_em:null, excluido_por:null }).eq("id", item.id);
+          if(error) throw error;
+          setLista(l=>l.filter(x=>x.id!==item.id));
+          setMsg("Registro restaurado.");
+        }catch(e){ setMsg("Erro ao restaurar: "+e.message); }
         finally{ setCarregando(false); }
       }
 
@@ -1233,14 +1378,32 @@
                 </select>
               </div>
             )}
-            <button className="btn btn-blue" onClick={buscar} disabled={carregando}>{carregando?"Buscando...":"Buscar"}</button>
+            {/* onClick={buscar} passaria o evento do clique como argumento — daí a arrow */}
+            <button className="btn btn-blue" onClick={()=>buscar()} disabled={carregando}>{carregando?"Buscando...":"Buscar"}</button>
             {lista.length>0 && <button className="btn btn-light" onClick={baixarTodos}>Baixar todos (PDF único)</button>}
-            <button onClick={excluirPeriodo} disabled={carregando}
-              style={{padding:"11px 16px",borderRadius:8,border:"1px solid #A32D2D",background:"#fff",color:"#A32D2D",fontSize:14,fontWeight:600,cursor:"pointer"}}>
-              Enviar período à lixeira
+            {!verLixeira && (
+              <button onClick={excluirPeriodo} disabled={carregando}
+                style={{padding:"11px 16px",borderRadius:8,border:"1px solid #A32D2D",background:"#fff",color:"#A32D2D",fontSize:14,fontWeight:600,cursor:"pointer"}}>
+                Enviar período à lixeira
+              </button>
+            )}
+            <button onClick={()=>{ const v=!verLixeira; setVerLixeira(v); setLista([]); buscar(v); }} disabled={carregando}
+              style={{padding:"11px 16px",borderRadius:8,border:"1px solid "+(verLixeira?"#185FA5":"#bbb"),
+                background:verLixeira?"#E6F1FB":"#fff",color:verLixeira?"#0C447C":"#555",fontSize:14,fontWeight:600,cursor:"pointer"}}>
+              {verLixeira?"← Ver registros ativos":"Ver lixeira"}
             </button>
           </div>
-          <p style={{fontSize:12,color:"#999",margin:"8px 0 0"}}>A exclusão remove os registros e os PDFs do período definido em "De/Até". Pede a senha do administrador para confirmar e é permanente.</p>
+          {verLixeira
+            ? <p style={{fontSize:12,color:"#0C447C",margin:"8px 0 0",background:"#E6F1FB",border:"1px solid #BBD6F0",borderRadius:8,padding:"8px 10px"}}>
+                Você está vendo a <b>lixeira</b>: registros que saíram das listagens mas continuam
+                no banco, com o PDF preservado. "Restaurar" devolve o registro ao normal.
+              </p>
+            : <p style={{fontSize:12,color:"#999",margin:"8px 0 0"}}>
+                Os registros do período em "De/Até" saem das listagens e vão para a lixeira.
+                <b> Não é exclusão definitiva:</b> os PDFs são mantidos e os registros podem ser
+                restaurados em "Ver lixeira". Pede a senha do administrador para confirmar.
+              </p>
+          }
           {prog && (
             <div style={{margin:"10px 0",padding:"10px 12px",border:"1px solid #e3e3e3",borderRadius:8,background:"#fafafa"}}>
               <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:"#555",marginBottom:6}}>
@@ -1266,6 +1429,12 @@
                 <div style={{flex:1}}>
                   <div style={{fontSize:14,fontWeight:500}}>{item[cfg.colTitulo]||"(sem descrição)"} — OS {item.numero_os||"-"}</div>
                   <div style={{fontSize:12,color:"#888"}}>{item.data_atividade||item.created_at?.slice(0,10)} · {item[cfg.colLocal]||"-"} · {item[cfg.colLider]||"-"}</div>
+                  {cfg.alertaRisco && alertasRiscoAlto(item).length>0 && (
+                    <div style={{marginTop:5,fontSize:12,color:"#A32D2D",background:"#F8ECEC",
+                      border:"1px solid #E3BFBF",borderRadius:6,padding:"5px 8px",lineHeight:1.4}}>
+                      <b>Risco ALTO sem barreira de Controle:</b> {alertasRiscoAlto(item).join("; ")}
+                    </div>
+                  )}
                 </div>
                 {item.pdf_path
                   ? <React.Fragment>
@@ -1277,7 +1446,12 @@
                       <input type="file" accept="application/pdf" style={{display:"none"}} onChange={e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=""; anexarPdf(item,f); }} />
                     </label>
                 }
-                <button style={{fontSize:13,padding:"7px 10px",borderRadius:8,border:"1px solid #A32D2D",background:"#fff",color:"#A32D2D",cursor:"pointer"}} onClick={()=>excluirUma(item)} title="Enviar este registro para a lixeira">Lixeira</button>
+                {verLixeira
+                  ? <button style={{fontSize:13,padding:"7px 10px",borderRadius:8,border:"1px solid #2E7D32",background:"#fff",color:"#2E7D32",cursor:"pointer"}}
+                      onClick={()=>restaurar(item)} title="Tirar da lixeira e voltar às listagens">Restaurar</button>
+                  : <button style={{fontSize:13,padding:"7px 10px",borderRadius:8,border:"1px solid #A32D2D",background:"#fff",color:"#A32D2D",cursor:"pointer"}}
+                      onClick={()=>excluirUma(item)} title="Enviar este registro para a lixeira">Lixeira</button>
+                }
               </div>
             ))}
           </div>
@@ -1425,19 +1599,6 @@
         };
       }
 
-      async function enviarPT(registro, colaboradores, bytes, osNome){
-        const nome="pt/PT_quente_"+(osNome||"sem_os")+"_"+Date.now()+".pdf";
-        const { error:e3 }=await supa.storage.from("dts-pdfs").upload(nome, new Blob([bytes],{type:"application/pdf"}), {upsert:true,contentType:"application/pdf"});
-        if(e3) throw e3;
-        const { data:ins, error }=await supa.from("pt").insert({...registro, pdf_path:nome}).select().single();
-        if(error){ try{ await supa.storage.from("dts-pdfs").remove([nome]); }catch(_){} throw error; }
-        if(colaboradores && colaboradores.length){
-          const rows=colaboradores.map((nome,i)=>({pt_id:ins.id,nome,ordem:i}));
-          const { error:e2 }=await supa.from("pt_colaborador").insert(rows); if(e2) throw e2;
-        }
-        return { id:ins.id, pdf_path:nome };
-      }
-
       async function salvarEGerar(){
         if(!numeroOs.trim()){ mostraToast("Preencha o Nº da O.S (TOA).",true); return; }
         if(tipoEquipe==="contratada" && !empresaEfetiva.trim()){ mostraToast("Informe a empresa contratada.",true); return; }
@@ -1461,14 +1622,36 @@
           const registro={...montarRegistro(), numero_os:osEfetiva, numero_os_base:osBase};
           const colaboradores=equipe.map(m=>m.nome);
           const osNome=osEfetiva.replace(/[^\w.-]+/g,"_")||"sem_os";
-          await salvarLocal({ id:localId, tipo:"pt_quente", nome:"PT_quente_"+osNome+".pdf", data:fmtData(agora.current),
-            dataISO:new Date().toISOString(), atividade:"PT a Quente", bytes });
+          const baseItem={ id:localId, tipo:"pt_quente", nome:"PT_quente_"+osNome+".pdf", data:fmtData(agora.current),
+            dataISO:new Date().toISOString(), atividade:"PT a Quente", bytes };
+          await salvarLocal(baseItem);
           setRecentes((await listarLocal()).filter(r=>r.tipo==="pt_quente"));
+
+          // Offline (ou falha de envio) a PT vai para a MESMA fila da DTS. Sem isto ela
+          // ficava só no aparelho e era apagada na limpeza do dia seguinte, sem nunca
+          // ter chegado ao servidor.
+          const enfileirar=async()=>{
+            await filaAdd({ id:localId, doc:"pt", tipo:"quente",
+              registro:{...registro, numero_os:osBase, numero_os_base:osBase},
+              colaboradores, osNome:osBase, bytes, osBase, dataAtividade:hoje });
+          };
+
           if(online){
-            try{ const res=await enviarPT(registro, colaboradores, bytes, osNome);
+            try{
+              const res=await enviarPTDoc("quente", registro, colaboradores, bytes, osNome);
+              if(res && res.pdf_path){
+                await salvarLocal({...baseItem, pdf_path:res.pdf_path});
+                setRecentes((await listarLocal()).filter(r=>r.tipo==="pt_quente"));
+              }
               mostraToast(osEfetiva!==osBase?("PT enviada como "+osEfetiva+"."):"PT salva e enviada!");
-            }catch(e){ mostraToast("Sem conexão estável. Salva localmente; reenvie ao reconectar.",true); }
-          } else { mostraToast("Offline: PT salva localmente.",true); }
+            }catch(e){
+              await enfileirar();
+              mostraToast("Sem conexão estável. PT salva e será enviada quando reconectar.");
+            }
+          } else {
+            await enfileirar();
+            mostraToast("Offline: PT salva. Será enviada automaticamente ao reconectar.");
+          }
         }catch(e){ mostraToast("Erro: "+e.message,true); }
         finally{ setSalvando(false); }
       }
@@ -2160,19 +2343,6 @@ altura: {
         };
       }
 
-      async function enviarPT(registro, colaboradores, bytes, osNome){
-        const nome="pt/PT_"+desc.tipo+"_"+(osNome||"sem_os")+"_"+Date.now()+".pdf";
-        const { error:e3 }=await supa.storage.from("dts-pdfs").upload(nome, new Blob([bytes],{type:"application/pdf"}), {upsert:true,contentType:"application/pdf"});
-        if(e3) throw e3;
-        const { data:ins, error }=await supa.from("pt").insert({...registro, pdf_path:nome}).select().single();
-        if(error){ try{ await supa.storage.from("dts-pdfs").remove([nome]); }catch(_){} throw error; }
-        if(colaboradores && colaboradores.length){
-          const rows=colaboradores.map((nome,i)=>({pt_id:ins.id,nome,ordem:i}));
-          const { error:e2 }=await supa.from("pt_colaborador").insert(rows); if(e2) throw e2;
-        }
-        return { id:ins.id, pdf_path:nome };
-      }
-
       async function salvarEGerar(){
         if(!numeroOs.trim()){ mostraToast("Preencha o Nº da O.S (TOA).",true); return; }
         if(tipoEquipe==="contratada" && !empresaEfetiva.trim()){ mostraToast("Informe a empresa contratada.",true); return; }
@@ -2201,13 +2371,30 @@ altura: {
             data:fmtData(agora.current), dataISO:new Date().toISOString(), atividade:"PT "+desc.titulo, bytes };
           await salvarLocal(baseItem);
           setRecentes((await listarLocal()).filter(r=>r.tipo===("pt_"+desc.tipo)));
+
+          // Offline (ou falha de envio) a PT vai para a MESMA fila da DTS. Sem isto ela
+          // ficava só no aparelho e era apagada na limpeza do dia seguinte, sem nunca
+          // ter chegado ao servidor.
+          const enfileirar=async()=>{
+            await filaAdd({ id:localId, doc:"pt", tipo:desc.tipo,
+              registro:{...registro, numero_os:osBase, numero_os_base:osBase},
+              colaboradores, osNome:osBase, bytes, osBase, dataAtividade:hoje });
+          };
+
           if(online){
-            try{ const res=await enviarPT(registro, colaboradores, bytes, osNome);
+            try{
+              const res=await enviarPTDoc(desc.tipo, registro, colaboradores, bytes, osNome);
               if(res && res.pdf_path){ await salvarLocal({...baseItem, pdf_path:res.pdf_path});
                 setRecentes((await listarLocal()).filter(r=>r.tipo===("pt_"+desc.tipo))); }
               mostraToast(osEfetiva!==osBase?("PT enviada como "+osEfetiva+"."):"PT salva e enviada!");
-            }catch(e){ mostraToast("Sem conexão estável. Salva localmente.",true); }
-          } else { mostraToast("Offline: PT salva localmente.",true); }
+            }catch(e){
+              await enfileirar();
+              mostraToast("Sem conexão estável. PT salva e será enviada quando reconectar.");
+            }
+          } else {
+            await enfileirar();
+            mostraToast("Offline: PT salva. Será enviada automaticamente ao reconectar.");
+          }
         }catch(e){ mostraToast("Erro: "+e.message,true); }
         finally{ setSalvando(false); }
       }
@@ -2752,6 +2939,23 @@ altura: {
       // inicio | dts_hub | dts | dts_adm | pt_hub | pt_menu | pt_quente | pt_adm
       const [modo,setModo]=useState("inicio");
       const [qrApp,setQrApp]=useState(false);
+      const [pendentesGlobal,setPendentesGlobal]=useState(0);
+
+      // ---- Sincronização da fila (DTS + PT) ----
+      // Fica AQUI, no componente raiz, e não dentro do formulário de DTS: antes, quem
+      // salvasse sem sinal e voltasse para o início nunca via a fila subir, porque o
+      // listener morria junto com a tela.
+      useEffect(()=>{
+        (async()=>{ setPendentesGlobal((await filaListar()).length); await sincronizarTudo(); })();
+        const aoReconectar=()=> sincronizarTudo();
+        const aoMudarFila=(e)=> setPendentesGlobal((e.detail && e.detail.restantes) || 0);
+        window.addEventListener("online", aoReconectar);
+        window.addEventListener("fila-mudou", aoMudarFila);
+        return ()=>{
+          window.removeEventListener("online", aoReconectar);
+          window.removeEventListener("fila-mudou", aoMudarFila);
+        };
+      },[]);
 
       // ---- Botão VOLTAR do Android ----
       // Sem isso, o voltar do celular fecha o app. Aqui ele recua uma tela por vez:
@@ -2812,6 +3016,15 @@ altura: {
             <p>Documentos Iguá Saneamento</p>
           </div>
           <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",gap:14,padding:24,maxWidth:420,margin:"0 auto",width:"100%"}}>
+            {pendentesGlobal>0 && (
+              // O operador precisa saber que ainda há documento no aparelho, mesmo sem
+              // abrir o formulário. Some sozinho quando a fila esvazia.
+              <div style={{background:"#FFF6E5",border:"1px solid #E7C77A",borderRadius:10,padding:"11px 13px",
+                fontSize:13,color:"#7A5510",lineHeight:1.45}}>
+                <b>{pendentesGlobal} documento(s) aguardando envio.</b><br/>
+                Ficam salvos no aparelho e sobem sozinhos quando houver sinal.
+              </div>
+            )}
             <p style={{textAlign:"center",color:"#666",fontSize:15,margin:"0 0 4px"}}>Qual documento?</p>
             <Card cor="#185FA5" titulo="DTS" sub="Discussão de Trabalho Seguro" onClick={()=>setModo("dts_hub")} />
             <Card cor="#0C447C" titulo="PT" sub="Permissão de Trabalho" onClick={()=>setModo("pt_hub")} />

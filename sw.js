@@ -1,6 +1,6 @@
 // Service Worker - DTS
 // Permite que o app funcione offline após a primeira abertura com internet.
-const CACHE = "dts-solution-v34";
+const CACHE = "dts-solution-v35";
 
 // Arquivos do próprio app (mesma origem) para pré-cachear na instalação
 const APP_SHELL = [
