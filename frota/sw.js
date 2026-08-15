@@ -5,7 +5,7 @@
 
 // IMPORTANTE: ao publicar uma nova versão do app, troque o número da versão
 // abaixo (ex: v2, v3...). Isso força os celulares a baixarem a versão nova.
-const VERSION = 'frota-gs-v9';
+const VERSION = 'frota-gs-v10';
 const CACHE = VERSION;
 
 // Arquivos essenciais do app (o "casco")
@@ -20,7 +20,10 @@ const APP_SHELL = [
   'https://unpkg.com/react@18.3.1/umd/react.production.min.js',
   'https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js',
   'https://unpkg.com/@babel/standalone@7.25.6/babel.min.js',
-  'https://unpkg.com/@supabase/supabase-js@2',
+  // ATENÇÃO: esta lista tem que bater EXATAMENTE com as URLs do index.html.
+  // Se divergir, o pré-cache baixa um arquivo que o app não usa e o arquivo certo
+  // fica fora do "casco" — o app passa a depender de uma carga online para funcionar.
+  'https://unpkg.com/@supabase/supabase-js@2.112.3',
   'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
 ];
 
