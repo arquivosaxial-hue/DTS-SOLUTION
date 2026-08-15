@@ -148,7 +148,7 @@ document.getElementById('boot-loader')?.classList.add('boot-hide');
 
 // React vem do CDN (UMD) - disponível como `React` global
 const { useState, useRef, useEffect } = React;
-const APP_VERSION = 'V7';   // versão exibida no rodapé da tela inicial
+const APP_VERSION = 'V8';   // versão exibida no rodapé da tela inicial
 
 // ============================================================
 // ÍCONES INLINE - paths SVG do Lucide embutidos no arquivo
@@ -349,9 +349,15 @@ async function filaContar() {
   catch (e) { return 0; }
 }
 
-// Envia um item da fila ao Supabase (registro + upload das fotos guardadas)
+// Envia um item da fila ao Supabase. O campo 'kind' diz o que é o item;
+// item antigo, gravado antes da fila aceitar checklist, não tem 'kind': é registro.
 async function enviarItemFila(item) {
   if (!supabaseClient) throw new Error('sem cliente');
+  if (item.kind === 'checklist_ferramenta') return enviarItemChecklistFerr(item);
+  return enviarItemRegistro(item);
+}
+
+async function enviarItemRegistro(item) {
   // 1) sobe a foto do painel (blob guardado)
   let fotoUrl = '';
   if (item.fotoBlob) {
@@ -373,30 +379,61 @@ async function enviarItemFila(item) {
   if (error) throw error;
   // 4) atualiza a máquina (status/horímetro)
   if (item.maquinaUpdate && item.maquinaId) {
-    await supabaseClient.from('maquinas').update(item.maquinaUpdate).eq('id', item.maquinaId);
+    const { error: eMaq } = await supabaseClient.from('maquinas').update(item.maquinaUpdate).eq('id', item.maquinaId);
+    if (eMaq) console.error('maquina nao atualizada', eMaq);
   }
 }
 
-// Tenta enviar toda a fila. Retorna { enviados, restantes }.
+// Checklist de ferramenta/equipamento feito sem sinal. Antes isto não existia: o
+// checklist ficava só no localStorage do aparelho e nunca chegava ao servidor.
+async function enviarItemChecklistFerr(item) {
+  const fotosUrls = [];
+  for (const blob of (item.fotosBlobs || [])) {
+    try { const u = await enviarFotoBlob(blob); if (u) fotosUrls.push(u); }
+    catch (e) { console.error('foto checklist offline', e); }
+  }
+  await enviarChecklistFerramenta({ ...item.reg, fotosUrls });
+}
+
+// Tenta enviar toda a fila. Retorna { enviados, restantes, comFalha }.
 let __sincronizando = false;
 async function sincronizarFila() {
   if (__sincronizando || !navigator.onLine || !supabaseClient) {
-    return { enviados: 0, restantes: await filaContar() };
+    return { enviados: 0, restantes: await filaContar(), comFalha: 0 };
   }
   __sincronizando = true;
-  let enviados = 0;
+  let enviados = 0, comFalha = 0;
   try {
     const itens = await filaListar();
     // ordena por data de criação para manter a ordem dos registros
-    itens.sort((a, b) => new Date(a.linha.criado_em || 0) - new Date(b.linha.criado_em || 0));
+    itens.sort((a, b) => new Date(dataDoItem(a)) - new Date(dataDoItem(b)));
     for (const item of itens) {
+      // rede caiu no meio da sincronização: para e tenta tudo de novo depois
+      if (!navigator.onLine) break;
       try { await enviarItemFila(item); await filaRemover(item.id); enviados++; }
-      catch (e) { console.error('falha ao sincronizar item', e); break; } // para na 1ª falha (provável queda de rede)
+      catch (e) {
+        // NÃO interrompe mais a fila. Antes havia um break aqui, então um item que
+        // falhasse por DADO (e não por rede) bloqueava para sempre todos os registros
+        // gravados depois dele, em silêncio.
+        comFalha++;
+        const tentativas = (item.tentativas || 0) + 1;
+        try {
+          await filaAdicionar({ ...item, tentativas, ultimoErro: String((e && e.message) || e).slice(0, 300) });
+        } catch (_) {}
+        console.error('falha ao sincronizar item', item.id, 'tentativa', tentativas, e);
+      }
     }
   } finally { __sincronizando = false; }
   const restantes = await filaContar();
-  window.dispatchEvent(new CustomEvent('fila-mudou', { detail: { restantes } }));
-  return { enviados, restantes };
+  window.dispatchEvent(new CustomEvent('fila-mudou', { detail: { restantes, comFalha } }));
+  return { enviados, restantes, comFalha };
+}
+
+// A fila mistura registros de operador e checklists de ferramenta, que guardam a data
+// em lugares diferentes.
+function dataDoItem(item) {
+  if (item && item.kind === 'checklist_ferramenta') return (item.reg && item.reg.criadoEm) || item.criadoEm || 0;
+  return (item && item.linha && item.linha.criado_em) || 0;
 }
 
 // Paleta (mantém o azul institucional da base)
@@ -5358,13 +5395,38 @@ function FerramentaPreenche({ tipoId, onVoltar, onConcluir, aviso }) {
     const reg = coletar();
     try {
       let id = 'ferr_' + Date.now();
+      let enviado = false;
       if (navigator.onLine && supabaseClient) {
         // sobe as fotos ao bucket 'fotos' (não bloqueia o salvamento se falhar)
         let fotosUrls = [];
         try { fotosUrls = await Promise.all(fotos.map(f => enviarFoto(f.blob))); } catch (e) { console.warn('upload fotos falhou', e); }
         reg.fotosUrls = fotosUrls.filter(Boolean);
-        try { const r = await enviarChecklistFerramenta(reg); id = r.id; } catch (e) { console.warn('envio falhou, salvo local', e); }
+        try { const r = await enviarChecklistFerramenta(reg); id = r.id; enviado = true; }
+        catch (e) { console.warn('envio falhou, vai para a fila', e); }
       }
+
+      // Offline (ou falha no envio): entra na FILA com as fotos como blobs. Sem isto o
+      // checklist ficava só no localStorage deste aparelho e a inspeção simplesmente
+      // não existia para a fiscalização.
+      if (!enviado) {
+        try {
+          await filaAdicionar({
+            id: 'fila_ferr_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+            kind: 'checklist_ferramenta',
+            // sem os dataURLs: quem vai para o servidor é a URL das fotos, e guardar as
+            // duas formas encheria o IndexedDB à toa
+            reg: { ...reg, fotos: [], fotosUrls: [] },
+            fotosBlobs: fotos.map(f => f.blob),
+            criadoEm: new Date().toISOString(),
+          });
+          window.dispatchEvent(new CustomEvent('fila-mudou', { detail: { restantes: await filaContar() } }));
+          aviso('Sem conexão: checklist salvo e será enviado ao reconectar.');
+        } catch (e) {
+          console.error('nao foi possivel enfileirar o checklist', e);
+          aviso('Não foi possível salvar o checklist para envio posterior.');
+        }
+      }
+
       adicionarMeuFerramenta({ id, tipoNome: t.nome, numEquip, criadoEm: new Date().toISOString(), reg });
       onConcluir(reg);
     } catch (e) { aviso('Erro ao salvar: ' + e.message); }
@@ -5559,6 +5621,16 @@ function App() {
 
   function aviso(msg) { setToast(msg); setTimeout(() => setToast(''), 2600); }
 
+  // Ações de validador e de admin escrevem direto no servidor e NÃO têm fila: enfileirar
+  // edição exigiria resolver conflito de versão, que é outro assunto. Então o mínimo
+  // honesto é avisar em vez de fingir que salvou — era o que acontecia antes, porque o
+  // supabase-js devolve { error } em vez de lançar exceção, e ninguém checava.
+  function exigeConexao() {
+    if (!supabaseClient) { aviso('Sem conexão com o servidor. Nada foi alterado.'); return false; }
+    if (!navigator.onLine) { aviso('Sem internet. Esta ação precisa de conexão — nada foi alterado.'); return false; }
+    return true;
+  }
+
   // Sincroniza a fila offline e atualiza o contador
   async function tentarSincronizar() {
     setSincronizando(true);
@@ -5566,6 +5638,8 @@ function App() {
       const r = await sincronizarFila();
       setFilaPendentes(r.restantes);
       if (r.enviados > 0) { aviso(`${r.enviados} registro(s) sincronizado(s).`); recarregar(); }
+      // item que falha não trava mais os outros, mas também não pode falhar calado
+      else if (r.comFalha > 0) { aviso(`${r.comFalha} registro(s) não subiram. Serão tentados de novo.`); }
     } catch (e) { console.error(e); }
     finally { setSincronizando(false); }
   }
@@ -5641,21 +5715,28 @@ function App() {
 
   // --- CRUD máquinas ---
   async function salvarMaquina(dados) {
-    if (!supabaseClient) return;
+    if (!exigeConexao()) return;
     const payload = maquinaParaBanco(dados);
-    if (dados.id) {
-      await supabaseClient.from('maquinas').update(payload).eq('id', dados.id);
-      aviso('Máquina atualizada.');
-    } else {
-      await supabaseClient.from('maquinas').insert(payload);
-      aviso('Máquina cadastrada.');
+    const { error } = dados.id
+      ? await supabaseClient.from('maquinas').update(payload).eq('id', dados.id)
+      : await supabaseClient.from('maquinas').insert(payload);
+    if (error) {
+      console.error('salvarMaquina', error);
+      aviso('Não foi possível salvar a máquina. Nada foi alterado.');
+      return;
     }
+    aviso(dados.id ? 'Máquina atualizada.' : 'Máquina cadastrada.');
     setTela('lista'); setEditando(null);
     recarregar();
   }
   async function toggleAtiva(m) {
-    if (!supabaseClient) return;
-    await supabaseClient.from('maquinas').update({ ativa: !m.ativa }).eq('id', m.id);
+    if (!exigeConexao()) return;
+    const { error } = await supabaseClient.from('maquinas').update({ ativa: !m.ativa }).eq('id', m.id);
+    if (error) {
+      console.error('toggleAtiva', error);
+      aviso('Não foi possível alterar a máquina. Nada foi alterado.');
+      return;
+    }
     aviso(m.ativa ? 'Máquina inativada.' : 'Máquina reativada.');
     recarregar();
   }
@@ -5811,20 +5892,25 @@ function App() {
 
   // --- Validação (validador) ---
   async function validarRegistro(reg, status, motivo) {
-    if (!supabaseClient) return;
+    if (!exigeConexao()) return;
     const nomeResp = responsavel || 'Validador';
     // acrescenta nota na observação sobre quem validou/invalidou
     const nota = status === 'validada'
       ? `[Validado por ${nomeResp} em ${new Date().toLocaleString('pt-BR')}]`
       : `[Invalidado por ${nomeResp} em ${new Date().toLocaleString('pt-BR')}${motivo ? ': ' + motivo : ''}]`;
     const obsNova = (reg.observacao ? reg.observacao + '\n' : '') + nota;
-    await supabaseClient.from('registros').update({
+    const { error } = await supabaseClient.from('registros').update({
       validacao_status: status,
       validacao_por: nomeResp,
       validacao_em: new Date().toISOString(),
       validacao_motivo: status === 'invalidada' ? motivo : null,
       observacao: obsNova,
     }).eq('id', reg.id);
+    if (error) {
+      console.error('validarRegistro', error);
+      aviso('Não foi possível validar o registro. Nada foi alterado.');
+      return;
+    }
     await registrarMovimentacao({
       responsavel: nomeResp, perfil: 'validador',
       acao: status === 'validada' ? 'Validou registro' : 'Invalidou registro',
@@ -5837,9 +5923,17 @@ function App() {
   }
   // --- Validação de checklist de ferramenta/equipamento ---
   async function validarChecklistFerr(reg, status, motivo) {
-    if (!supabaseClient) return;
+    if (!exigeConexao()) return;
     const nomeResp = responsavel || 'Validador';
-    await validarChecklistFerramenta(reg, status, motivo, nomeResp);
+    // validarChecklistFerramenta lança em caso de erro; sem este try a promessa
+    // ficava rejeitada sem tratamento e o validador não recebia aviso nenhum
+    try {
+      await validarChecklistFerramenta(reg, status, motivo, nomeResp);
+    } catch (e) {
+      console.error('validarChecklistFerr', e);
+      aviso('Não foi possível validar o checklist. Nada foi alterado.');
+      return;
+    }
     await registrarMovimentacao({
       responsavel: nomeResp, perfil: 'validador',
       acao: status === 'validada' ? 'Validou checklist de ferramenta' : 'Invalidou checklist de ferramenta',
@@ -5856,7 +5950,7 @@ function App() {
 
   // --- Ajuste manual do admin (editar/criar status de um dia) ---
   async function salvarAjusteRegistro(ctx, dados) {
-    if (!supabaseClient) return;
+    if (!exigeConexao()) return;
     const agora = new Date().toISOString();
     const nomeResp = responsavel || 'Administrador';
     const temHori = dados.horimetro != null && !isNaN(Number(dados.horimetro));
@@ -5877,7 +5971,12 @@ function App() {
         patch.horimetro = Number(dados.horimetro);
         patch.horimetro_na = false;
       }
-      await supabaseClient.from('registros').update(patch).eq('id', ctx.registro.id);
+      const { error: eUp } = await supabaseClient.from('registros').update(patch).eq('id', ctx.registro.id);
+      if (eUp) {
+        console.error('salvarAjusteRegistro/update', eUp);
+        aviso('Não foi possível alterar o registro. Nada foi alterado.');
+        return;
+      }
       // se for a leitura mais recente da máquina, atualiza o medidor atual
       if (dados.status === 'funcional' && temHori) {
         const maqId = (ctx.maquina && ctx.maquina.id) || ctx.registro.maquinaId;
@@ -5893,7 +5992,7 @@ function App() {
     } else {
       // cria registro do zero para o dia
       const m = ctx.maquina;
-      await supabaseClient.from('registros').insert({
+      const { error: eIns } = await supabaseClient.from('registros').insert({
         maquina_id: m.id,
         maquina_codigo: m.codigo,
         maquina_descricao: m.descricao,
@@ -5911,6 +6010,11 @@ function App() {
         ajuste_admin_em: agora,
         criado_em: new Date(ctx.data + 'T12:00:00').toISOString(),
       });
+      if (eIns) {
+        console.error('salvarAjusteRegistro/insert', eIns);
+        aviso('Não foi possível lançar o registro. Nada foi criado.');
+        return;
+      }
       await registrarMovimentacao({
         responsavel: nomeResp, perfil: 'admin', acao: 'Lançou status do dia',
         maquinaId: m.id, maquinaNome: nomeMaq,
@@ -5943,13 +6047,16 @@ function App() {
 
   // --- CRUD obras ---
   async function criarObra(nome) {
-    if (!supabaseClient) return;
-    await supabaseClient.from('obras').insert({ nome, ativa:true });
+    if (!exigeConexao()) return;
+    const { error } = await supabaseClient.from('obras').insert({ nome, ativa:true });
+    if (error) { console.error('criarObra', error); aviso('Não foi possível criar a obra.'); return; }
     recarregar();
   }
   async function renomearObra(id, nome) {
-    if (!nome || !supabaseClient) return;
-    await supabaseClient.from('obras').update({ nome }).eq('id', id);
+    if (!nome) return;
+    if (!exigeConexao()) return;
+    const { error } = await supabaseClient.from('obras').update({ nome }).eq('id', id);
+    if (error) { console.error('renomearObra', error); aviso('Não foi possível renomear a obra.'); return; }
     recarregar();
   }
   async function excluirObra(o) {
