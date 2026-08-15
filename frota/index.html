@@ -18,8 +18,16 @@
   <!-- Babel Standalone para compilar JSX no browser -->
   <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
 
-  <!-- Supabase SDK -->
-  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <!-- Supabase SDK — VERSÃO FIXA. Antes era @2 (faixa aberta): qualquer release nova
+       entrava sozinha no app em campo, sem teste e sem rollback.
+       SRI calculado e pronto, mas NÃO ativado — hash errado deixa o app em branco, e não
+       dá para validar sem rodar localmente. Para ativar, some crossorigin="anonymous":
+         supabase-js 2.112.3 (unpkg) sha384-qafw21c/iciq0VXsi9FzkfoQv5I/V0iqE4lSNcKXPnW9/UTJLnv5CcN4FHxVLnKg
+         jspdf 2.5.1                 sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoVqcKyIIWOLk
+         react 18.3.1                sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z
+         react-dom 18.3.1            sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1
+         babel 7.25.6                sha384-EIcs2MbARRLcLs7Gv2wqqhhfMlcLeW9yuJsWki1r5iveN1F5gpzHOwAKycJqSQOI -->
+  <script src="https://unpkg.com/@supabase/supabase-js@2.112.3"></script>
 
   <!-- jsPDF (geração de PDF) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -148,7 +156,7 @@ document.getElementById('boot-loader')?.classList.add('boot-hide');
 
 // React vem do CDN (UMD) - disponível como `React` global
 const { useState, useRef, useEffect } = React;
-const APP_VERSION = 'V8';   // versão exibida no rodapé da tela inicial
+const APP_VERSION = 'V9';   // versão exibida no rodapé da tela inicial
 
 // ============================================================
 // ÍCONES INLINE - paths SVG do Lucide embutidos no arquivo
