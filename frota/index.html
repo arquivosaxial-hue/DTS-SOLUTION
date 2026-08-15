@@ -153,7 +153,7 @@ document.getElementById('boot-loader')?.classList.add('boot-hide');
 
 // React vem do CDN (UMD) - disponível como `React` global
 const { useState, useRef, useEffect } = React;
-const APP_VERSION = 'V11';  // versão exibida no rodapé da tela inicial
+const APP_VERSION = 'V12';  // versão exibida no rodapé da tela inicial
 
 // ============================================================
 // ÍCONES INLINE - paths SVG do Lucide embutidos no arquivo
@@ -298,6 +298,20 @@ const supabaseClient = (typeof window !== 'undefined' && window.supabase)
   : null;
 
 // ============================================================
+// Identificador estável do registro, gerado UMA vez no aparelho e guardado na fila.
+// Permite ao banco reconhecer um reenvio como repetição em vez de criar uma segunda
+// cópia — o caso comum é a escrita chegar e a resposta se perder, que em obra é rotina.
+function novoIdCliente() {
+  try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch (e) {}
+  return 'c_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+}
+
+// 23505 = unique_violation. Com cliente_id, significa "este mesmo registro já entrou".
+const ERRO_DUPLICADO = '23505';
+function eDuplicado(erro) {
+  return erro && erro.code === ERRO_DUPLICADO && String(erro.message || '').includes('cliente_id');
+}
+
 // FILA OFFLINE (IndexedDB)
 // Guarda registros feitos sem internet (com as fotos como blobs)
 // e envia ao Supabase quando a conexão volta.
@@ -381,7 +395,9 @@ async function enviarItemRegistro(item) {
     fotos_extras: fotosExtrasUrls,
   };
   const { error } = await supabaseClient.from('registros').insert(linha);
-  if (error) throw error;
+  // duplicata impedida pelo banco: o registro já subiu numa tentativa anterior cuja
+  // resposta se perdeu. Não é erro — é exatamente o que o cliente_id existe para fazer.
+  if (error && !eDuplicado(error)) throw error;
   // 4) atualiza a máquina (status/horímetro)
   if (item.maquinaUpdate && item.maquinaId) {
     const { error: eMaq } = await supabaseClient.from('maquinas').update(item.maquinaUpdate).eq('id', item.maquinaId);
@@ -5054,9 +5070,12 @@ async function enviarChecklistFerramenta(reg) {
     nome_inspecao: reg.nomeInspecao || null, nome_equip: reg.nomeEquip || null,
     nome_lider: reg.nomeLider || null, data_ref: reg.dataRef || diaLocal(new Date()),
     fotos_url: reg.fotosUrls || [],
+    // vem do reg para sobreviver à fila: reenvio usa o MESMO id e o banco recusa a cópia
+    cliente_id: reg.clienteId || novoIdCliente(),
   };
   const { data, error } = await supabaseClient
     .from('checklists_ferramenta').insert(linha).select('id').single();
+  if (eDuplicado(error)) return { id: null, jaExistia: true };
   if (error) throw error;
   return { id: data.id };
 }
@@ -5356,6 +5375,8 @@ function FerramentaPreenche({ tipoId, onVoltar, onConcluir, aviso }) {
   const [nomeEquip, setNomeEquip] = React.useState('');
   const [nomeLider, setNomeLider] = React.useState('');
   const [fotos, setFotos] = React.useState([]); // [{dataUrl, blob}]  máx 4
+  // um id por preenchimento, estável enquanto a tela estiver aberta
+  const clienteIdRef = React.useRef(novoIdCliente());
   const [salvando, setSalvando] = React.useState(false);
   const MAX_FOTOS = 4;
 
@@ -5389,6 +5410,9 @@ function FerramentaPreenche({ tipoId, onVoltar, onConcluir, aviso }) {
       observacoes, liberado, nomeInspecao, nomeEquip, nomeLider,
       fotos: fotos.map(f => f.dataUrl),     // dataURLs p/ o relatório fotográfico do PDF
       dataRef: diaLocal(new Date()),
+      // gerado uma vez por preenchimento: se este checklist for para a fila e reenviado,
+      // vai com o mesmo id e o banco impede a segunda cópia
+      clienteId: clienteIdRef.current,
     };
   }
 
@@ -5406,8 +5430,11 @@ function FerramentaPreenche({ tipoId, onVoltar, onConcluir, aviso }) {
         let fotosUrls = [];
         try { fotosUrls = await Promise.all(fotos.map(f => enviarFoto(f.blob))); } catch (e) { console.warn('upload fotos falhou', e); }
         reg.fotosUrls = fotosUrls.filter(Boolean);
-        try { const r = await enviarChecklistFerramenta(reg); id = r.id; enviado = true; }
-        catch (e) { console.warn('envio falhou, vai para a fila', e); }
+        try {
+          const r = await enviarChecklistFerramenta(reg);
+          if (r.id) id = r.id;   // se jaExistia, o servidor já tem: segue como enviado
+          enviado = true;
+        } catch (e) { console.warn('envio falhou, vai para a fila', e); }
       }
 
       // Offline (ou falha no envio): entra na FILA com as fotos como blobs. Sem isto o
@@ -5788,6 +5815,9 @@ function App() {
 
     // linha base (sem fotos — as URLs entram no envio)
     const linhaBase = {
+      // nasce aqui e acompanha o registro até o fim, inclusive na fila: é o que impede
+      // uma segunda cópia quando a escrita chega ao servidor e a resposta se perde
+      cliente_id: novoIdCliente(),
       maquina_id: opMaquina.id,
       maquina_codigo: opMaquina.codigo,
       maquina_descricao: opMaquina.descricao,
