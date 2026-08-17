@@ -152,7 +152,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V38";
+    const APP_VERSION = "V39";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://pxcrbgpycoifibrewqsx.supabase.co";
@@ -1293,9 +1293,10 @@
     const CFG_DTS={ tabela:"dts", colab:"dts_colaborador", fk:"dts_id", rotulo:"DTS", prefixo:"DTS",
       colTitulo:"atividade", colLocal:"localizacao", colLider:"lider_frente", alertaRisco:true,
       select:"id,created_at,numero_os,atividade,localizacao,lider_frente,pdf_path,data_atividade,riscos,excluido_em" };
-    const CFG_PT_QUENTE={ tabela:"pt_quente", colab:"pt_quente_colaborador", fk:"pt_id", rotulo:"PT a Quente", prefixo:"PT_quente",
-      colTitulo:"descricao_trabalho", colLocal:"local_trabalho", colLider:"lider_atividade",
-      select:"id,created_at,numero_os,descricao_trabalho,local_trabalho,lider_atividade,pdf_path,data_atividade" };
+    // As tabelas pt_quente / pt_quente_colaborador são anteriores à unificação em 'pt'.
+    // Nenhuma tela usa mais, e o acesso anônimo a elas foi fechado no banco em 15/08/2026.
+    // O histórico continua lá; para consultá-lo, use o painel do Supabase.
+    //
     // Tabela única de PT: admin filtra por tipo + data. filtroTipo habilita o seletor de tipo.
     const PT_TIPOS=[["","Todas"],["quente","A Quente"],["eletricidade","Eletricidade"],["altura","Altura"],["escavacao","Escavação"],["confinado","Espaço Confinado"],["mergulho","Mergulho"],["icamento","Içamento"]];
     const CFG_PT={ tabela:"pt", colab:"pt_colaborador", fk:"pt_id", rotulo:"PT", prefixo:"PT",
