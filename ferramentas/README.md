@@ -36,8 +36,24 @@ Roda em segundos e faz quatro checagens:
 4. **As bibliotecas têm SRI?** Sem `integrity=`, um CDN comprometido executa o
    que quiser dentro do app.
 
+5. **Os modelos de PDF continuam os mesmos?** As coordenadas de escrita foram
+   calibradas à mão contra cada `modelo_*.pdf`. Se a Iguá revisar um formulário e
+   alguém trocar o arquivo, o texto passa a sair fora do lugar — e isso só aparece
+   no PDF impresso, já em campo.
+
 Se sair `NÃO publique`, corrija antes. O script devolve código de saída 1, então
 dá para ligar em CI depois.
+
+### Quando um modelo de PDF mudar de propósito
+
+Trocou um `modelo_*.pdf`? O verificar vai acusar. Isso é o esperado: **recalibre as
+coordenadas, confira o PDF gerado** e só então registre a nova versão:
+
+```bash
+npm run modelos:gravar
+```
+
+Nunca rode `modelos:gravar` só para calar o aviso sem conferir o PDF impresso.
 
 ---
 

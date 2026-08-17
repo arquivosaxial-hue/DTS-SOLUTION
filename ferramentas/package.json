@@ -6,7 +6,9 @@
   "scripts": {
     "verificar": "node verificar.js",
     "servidor": "node servidor.js",
-    "sri": "node sri.js"
+    "sri": "node sri.js",
+    "modelos": "node modelos.js",
+    "modelos:gravar": "node modelos.js --gravar"
   },
   "dependencies": {
     "@babel/core": "^7.25.0",
