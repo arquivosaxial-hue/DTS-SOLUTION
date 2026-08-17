@@ -153,7 +153,7 @@ document.getElementById('boot-loader')?.classList.add('boot-hide');
 
 // React vem do CDN (UMD) - disponível como `React` global
 const { useState, useRef, useEffect } = React;
-const APP_VERSION = 'V12';  // versão exibida no rodapé da tela inicial
+const APP_VERSION = 'V13';  // versão exibida no rodapé da tela inicial
 
 // ============================================================
 // ÍCONES INLINE - paths SVG do Lucide embutidos no arquivo
@@ -1163,6 +1163,71 @@ function caminhoDaFotoUrl(url) {
   return decodeURIComponent(url.slice(i + marca.length));
 }
 
+// ------------------------------------------------------------
+// LINKS TEMPORÁRIOS PARA AS FOTOS
+// ------------------------------------------------------------
+// O que está gravado em foto_url / fotos_extras / fotos_url / documento_url é URL
+// PÚBLICA e PERMANENTE: quem vir o link uma vez vê a foto para sempre, sem login.
+// São fotos de campo, com trabalhador, e documento de veículo — dado pessoal sob LGPD.
+//
+// Aqui a URL gravada é convertida em link ASSINADO de 1 hora na hora de exibir. O que
+// está no banco não muda: a assinatura é derivada do CAMINHO, que dá para extrair da
+// própria URL pública. Por isso funciona com tudo que já foi gravado, e continua
+// funcionando depois que o bucket 'fotos' for fechado no painel do Supabase.
+//
+// Enquanto o bucket seguir público, isto não quebra nada: qualquer falha na assinatura
+// cai de volta na URL original.
+const __cacheAssinada = new Map(); // caminho -> { url, expiraEm }
+
+async function urlAssinada(publica) {
+  if (!publica || !supabaseClient) return publica;
+  const caminho = caminhoDaFotoUrl(publica);
+  if (!caminho) return publica;               // não é do bucket: devolve como veio
+  const agora = Date.now();
+  const emCache = __cacheAssinada.get(caminho);
+  // renova um minuto antes de vencer, para não entregar link já expirado
+  if (emCache && emCache.expiraEm > agora + 60000) return emCache.url;
+  try {
+    const { data, error } = await supabaseClient.storage.from('fotos').createSignedUrl(caminho, 3600);
+    if (error || !data || !data.signedUrl) return publica;
+    __cacheAssinada.set(caminho, { url: data.signedUrl, expiraEm: agora + 3600 * 1000 });
+    return data.signedUrl;
+  } catch (e) { return publica; }
+}
+
+// Miniatura que resolve o link assinado sozinha. Enquanto resolve, mostra um bloco
+// neutro em vez de piscar imagem quebrada.
+function FotoSegura({ url, alt, style }) {
+  const [src, setSrc] = React.useState(null);
+  React.useEffect(() => {
+    let vivo = true;
+    urlAssinada(url).then((u) => { if (vivo) setSrc(u); });
+    return () => { vivo = false; };
+  }, [url]);
+  if (!src) return <div style={{ ...style, background: COR.borda }} />;
+  return (
+    <a href={src} target="_blank" rel="noopener noreferrer">
+      <img src={src} alt={alt || ''} style={style} />
+    </a>
+  );
+}
+
+// Link de arquivo (documento de veículo) com a mesma proteção.
+function LinkSeguro({ url, children, style }) {
+  const [src, setSrc] = React.useState(null);
+  React.useEffect(() => {
+    let vivo = true;
+    urlAssinada(url).then((u) => { if (vivo) setSrc(u); });
+    return () => { vivo = false; };
+  }, [url]);
+  return (
+    <a href={src || '#'} target="_blank" rel="noopener noreferrer"
+       onClick={(e) => { if (!src) e.preventDefault(); }} style={style}>
+      {children}
+    </a>
+  );
+}
+
 // Exclui todos os registros de um período + as fotos no Storage
 // Envia para a LIXEIRA os registros do período.
 // Recebe TODOS os filtros da tela (período, obra e máquina) — antes o
@@ -1219,9 +1284,12 @@ function dataHoraBR(iso) {
 }
 
 // Carrega uma imagem (URL) como dataURL para embutir no PDF. Retorna '' se falhar.
+// Assina antes de baixar: assim os PDFs continuam saindo com as fotos depois que o
+// bucket 'fotos' for fechado no painel. Enquanto ele for público, urlAssinada devolve
+// a própria URL em caso de falha, então nada muda.
 async function imagemParaDataURL(url) {
   try {
-    const resp = await fetch(url);
+    const resp = await fetch(await urlAssinada(url));
     const blob = await resp.blob();
     return await new Promise((res) => {
       const r = new FileReader();
@@ -2334,7 +2402,7 @@ function FormMaquina({ maquina, obras, onSalvar, onCancelar }) {
               <span style={{fontSize:13, color:COR.texto, fontWeight:600, flex:1, minWidth:120}}>
                 Documento anexado{f.documentoEm ? ` em ${new Date(f.documentoEm).toLocaleDateString('pt-BR')}` : ''}
               </span>
-              <a href={f.documentoUrl} target="_blank" rel="noopener noreferrer" style={{...S.botaoSec, padding:'7px 12px', fontSize:13, textDecoration:'none'}}><Download size={15}/> Ver/baixar</a>
+              <LinkSeguro url={f.documentoUrl} style={{...S.botaoSec, padding:'7px 12px', fontSize:13, textDecoration:'none'}}><Download size={15}/> Ver/baixar</LinkSeguro>
             </div>
           ) : (
             <p style={{fontSize:12.5, color:COR.cinza, margin:'0 2px 10px'}}>Nenhum documento anexado ainda.</p>
@@ -4429,8 +4497,8 @@ function TelaRegistros({ registros, maquinas, onVoltar, onExcluirPeriodo, onSalv
                     {r.observacao && <div style={{fontSize:13.5, marginBottom:12}}><b>Observação:</b> {r.observacao}</div>}
                     {((r.fotoUrl ? 1 : 0) + (r.fotosExtras||[]).length) > 0 && (
                       <div style={{display:'flex', gap:8, flexWrap:'wrap', marginBottom:12}}>
-                        {r.fotoUrl && <a href={r.fotoUrl} target="_blank" rel="noopener"><img src={r.fotoUrl} alt="painel" style={{width:70, height:70, objectFit:'cover', borderRadius:8, border:`1px solid ${COR.borda}`}}/></a>}
-                        {(r.fotosExtras||[]).map((u,i) => <a key={i} href={u} target="_blank" rel="noopener"><img src={u} alt={'f'+i} style={{width:70, height:70, objectFit:'cover', borderRadius:8, border:`1px solid ${COR.borda}`}}/></a>)}
+                        {r.fotoUrl && <FotoSegura url={r.fotoUrl} alt="painel" style={{width:70, height:70, objectFit:'cover', borderRadius:8, border:`1px solid ${COR.borda}`}}/>}
+                        {(r.fotosExtras||[]).map((u,i) => <FotoSegura key={i} url={u} alt={'f'+i} style={{width:70, height:70, objectFit:'cover', borderRadius:8, border:`1px solid ${COR.borda}`}}/>)}
                       </div>
                     )}
                     <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
@@ -4755,7 +4823,7 @@ function ValidadorRegistros({ obra, registros, maquinas, checklistsFerr, onValid
                       {!func && <div><b>Motivo:</b> {r.motivoParada || '—'}</div>}
                     </div>
                     {r.observacao && <div style={{fontSize:13.5, marginBottom:10}}><b>Obs:</b> {r.observacao}</div>}
-                    {r.fotoUrl && <a href={r.fotoUrl} target="_blank" rel="noopener"><img src={r.fotoUrl} alt="painel" style={{width:90, height:90, objectFit:'cover', borderRadius:8, border:`1px solid ${COR.borda}`, marginBottom:10}}/></a>}
+                    {r.fotoUrl && <FotoSegura url={r.fotoUrl} alt="painel" style={{width:90, height:90, objectFit:'cover', borderRadius:8, border:`1px solid ${COR.borda}`, marginBottom:10}}/>}
 
                     {invalidando === r.id ? (
                       <div style={{marginTop:6}}>
