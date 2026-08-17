@@ -1,86 +1,95 @@
-// Service Worker - DTS
-// Permite que o app funcione offline após a primeira abertura com internet.
-const CACHE = "dts-solution-v39";
+// Service Worker — Frota Grupo Solution
+// Estratégia: guarda o "casco" do app (HTML, ícones e libs de CDN) para
+// abrir offline. NUNCA faz cache das chamadas ao Supabase (dados/fotos),
+// que sempre vão para a rede.
 
-// Arquivos do próprio app (mesma origem) para pré-cachear na instalação
+// IMPORTANTE: ao publicar uma nova versão do app, troque o número da versão
+// abaixo (ex: v2, v3...). Isso força os celulares a baixarem a versão nova.
+const VERSION = 'frota-gs-v13';
+const CACHE = VERSION;
+
+// Arquivos essenciais do app (o "casco")
 const APP_SHELL = [
-  "./",
-  "./index.html",
-  "./modelo_dts.pdf",
-  "./modelo_pt_quente.pdf",
-  "./modelo_pt_eletricidade.pdf",
-  "./modelo_pt_altura.pdf",
-  "./modelo_pt_escavacao.pdf",
-  "./modelo_pt_confinado.pdf",
-  "./modelo_pt_mergulho.pdf",
-  "./modelo_pt_icamento.pdf",
-  "./manifest.json",
-  "./icon-192.png",
-  "./icon-512.png",
+  './',
+  './index.html',
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png',
+
+  // bibliotecas de CDN usadas pelo app (para abrir offline)
+  'https://unpkg.com/react@18.3.1/umd/react.production.min.js',
+  'https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js',
+  'https://unpkg.com/@babel/standalone@7.25.6/babel.min.js',
+  // ATENÇÃO: esta lista tem que bater EXATAMENTE com as URLs do index.html.
+  // Se divergir, o pré-cache baixa um arquivo que o app não usa e o arquivo certo
+  // fica fora do "casco" — o app passa a depender de uma carga online para funcionar.
+  'https://unpkg.com/@supabase/supabase-js@2.112.3',
+  'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
 ];
 
-// CDNs das bibliotecas - cacheadas em runtime na primeira visita online
-const CDN_HOSTS = [
-  "unpkg.com",
-  "cdn.jsdelivr.net",
-  "cdnjs.cloudflare.com",
-];
-
-self.addEventListener("install", (e) => {
-  e.waitUntil(
-    caches.open(CACHE).then((c) => c.addAll(APP_SHELL)).catch(()=>{}).then(()=>self.skipWaiting())
+// Instalação: baixa e guarda o casco
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE).then((cache) =>
+      // addAll falha se algum recurso falhar; usamos add individual tolerante
+      Promise.allSettled(APP_SHELL.map((url) => cache.add(url)))
+    ).then(() => self.skipWaiting())
   );
 });
 
-self.addEventListener("activate", (e) => {
-  e.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
+// Ativação: limpa caches de versões antigas
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((nomes) =>
+      Promise.all(nomes.filter((n) => n !== CACHE).map((n) => caches.delete(n)))
     ).then(() => self.clients.claim())
   );
 });
 
-// Permite que a página peça ativação imediata da nova versão
-self.addEventListener("message", (e) => {
-  if (e.data === "SKIP_WAITING") self.skipWaiting();
-});
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  const url = new URL(req.url);
 
-self.addEventListener("fetch", (e) => {
-  const url = new URL(e.request.url);
+  // Só lidamos com GET. POST/PATCH/DELETE (Supabase) passam direto pela rede.
+  if (req.method !== 'GET') return;
 
-  // Nunca cachear chamadas ao Supabase (API e Storage)
-  if (url.hostname.endsWith("supabase.co")) {
-    return; // deixa passar direto pela rede
+  // NUNCA faz cache de chamadas ao Supabase (API e Storage) — sempre rede.
+  if (url.hostname.endsWith('supabase.co')) {
+    return; // deixa o navegador tratar normalmente (vai à rede)
   }
 
-  const isApp = url.origin === self.location.origin;
-  const isCDN = CDN_HOSTS.some((h) => url.hostname.endsWith(h));
-  if (!isApp && !isCDN) return;
-
-  // Para o app (HTML e arquivos próprios): REDE PRIMEIRO.
-  // Assim, correções chegam na hora; o cache só entra se estiver offline.
-  if (isApp) {
-    e.respondWith(
-      fetch(e.request).then((resp) => {
-        if (resp && resp.status === 200) {
-          const copy = resp.clone();
-          caches.open(CACHE).then((c) => c.put(e.request, copy));
-        }
-        return resp;
-      }).catch(() => caches.match(e.request)) // offline: usa o cache
+  // Navegação (abrir o app): network-first, cai pro cache se offline.
+  if (req.mode === 'navigate') {
+    event.respondWith(
+      fetch(req)
+        .then((resp) => {
+          const copia = resp.clone();
+          caches.open(CACHE).then((c) => c.put('./index.html', copia));
+          return resp;
+        })
+        .catch(() => caches.match('./index.html').then((r) => r || caches.match('./')))
     );
     return;
   }
 
-  // Para as CDNs (bibliotecas que não mudam): cache primeiro (mais rápido).
-  e.respondWith(
-    caches.open(CACHE).then(async (cache) => {
-      const cached = await cache.match(e.request);
-      const fetchPromise = fetch(e.request).then((resp) => {
-        if (resp && resp.status === 200) cache.put(e.request, resp.clone());
-        return resp;
-      }).catch(() => cached);
-      return cached || fetchPromise;
+  // Demais GET (libs, ícones): cache-first, atualiza em segundo plano.
+  event.respondWith(
+    caches.match(req).then((cacheada) => {
+      const rede = fetch(req)
+        .then((resp) => {
+          if (resp && resp.status === 200) {
+            const copia = resp.clone();
+            caches.open(CACHE).then((c) => c.put(req, copia));
+          }
+          return resp;
+        })
+        .catch(() => cacheada);
+      return cacheada || rede;
     })
   );
+});
+
+// Permite que a página peça ativação imediata da nova versão
+self.addEventListener('message', (event) => {
+  if (event.data === 'SKIP_WAITING') self.skipWaiting();
 });
